@@ -1,0 +1,86 @@
+# KD-R — counterfactual region distillation (method spec §4.4)
+#
+# Every value here is a CONFIGURED CHOICE, not a measured optimum. Nothing in
+# this file has been tuned, because no run has happened. Thresholds must be
+# selected on train/val only — never on test (master prompt §6.7).
+
+relevance:
+  # Softmax temperature over [r_1 .. r_M, r_null].
+  tau_teacher: 1.0
+
+  # The null slot r_∅: "no region accounts for this answer".
+  # The spec does not pin a numeric value. 0.0 means the null slot competes
+  # on the same scale as an irrelevant region, so a sample where masking
+  # changes nothing puts most mass on null — which is the diagnostic signal
+  # the stopping rule in spec §8 looks for.
+  # REPORT THIS VALUE WITH ANY KD-R RESULT. It changes the target.
+  r_null: 0.0
+
+  # Masking that produces a *rise* in answer probability is clipped to zero.
+  # Not configurable: see README "Decisions that must not be reverted".
+
+gate:
+  # w_n = 1[teacher correct] · 1[m_n >= delta] · c_n
+  delta: 0.5              # minimum teacher mass on the annotated target region
+  use_correctness: true
+  use_mass: true
+  use_confidence: true
+
+  # Teacher confidence must be CALIBRATED before it is used as c_n.
+  # A raw softmax max is not a calibrated probability (master prompt §10.5).
+  confidence_source: temperature_scaled   # must be recorded in the run log
+
+masking:
+  # Spec does not fix a masking operator. This is an ablation axis
+  # ("các phương pháp masking khác nhau"), not a settled choice.
+  method: constant_fill   # constant_fill | blur | inpaint
+  fill_value: 0.0
+  blur_sigma: 16.0
+
+regions:
+  # Hard cap on teacher calls per question. KD-R costs 1 + M passes per
+  # question; M is the main lever on total compute.
+  max_regions_per_image: 8
+  source: detector        # annotation | detector | grid
+  nms_iou: 0.5
+
+loss:
+  # L = sum_n w_n KL(pi^T_n || pi^S_n) / (sum_n w_n + eps)
+  eps: 1.0e-8
+  lambda_kd_r: 1.0        # weight in the stage-2 objective
+
+# --- Table E ablation rows. Each overrides the gate above. ---------------
+ablations:
+  unfiltered:             # "KD-R không chọn lọc": w_n = 1
+    use_correctness: false
+    use_mass: false
+    use_confidence: false
+  confidence_only:        # "KD-R chỉ theo c_n"
+    use_correctness: false
+    use_mass: false
+  mass_only:              # "KD-R chỉ theo m_n"
+    use_correctness: false
+    use_confidence: false
+  random_gate:            # "KD-R chọn ngẫu nhiên"
+    # Keep a random subset at the SAME retention rate as the full gate,
+    # or the comparison is confounded by how much data each row saw.
+    match_retention_to: selective
+    seed: 0
+
+runtime:
+  # KD-R generation must survive a killed Kaggle session.
+  shard_size: 500
+  resume: true
+  cache_dir: cache/kd_r
+  # Cache key MUST include the mask method and region id. A cache entry for
+  # the original image must never be reused for a masked one
+  # (master prompt §5.2).
+  cache_key_fields:
+    - sample_id
+    - teacher_model_id
+    - image_hash
+    - question
+    - prompt_version
+    - decoding_config
+    - region_id
+    - mask_method

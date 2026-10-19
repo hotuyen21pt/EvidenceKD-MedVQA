@@ -1,0 +1,84 @@
+# Data configuration (method spec §2)
+#
+# Nothing here has been validated against files on disk — the dataset is not
+# downloaded yet. Treat every field as a declared intent until
+# scripts/validate_data.py has run and written reports/data_audit.json.
+
+dataset:
+  name: VinDr-CXR-VQA
+  hf_id: Dangindev/VinDR-CXR-VQA
+  paper: https://arxiv.org/abs/2511.00504
+  license: CC-BY-4.0
+  # Verified from the dataset card 2026-10-19; re-verify against real files.
+  expected_images: 4394
+  expected_qa_pairs: 17597
+  expected_classes: 14
+  # The release ships ONE split named "train". val/test are constructed.
+  shipped_splits: [train]
+
+full_annotation:
+  # QA+Full mode additionally uses VinDr-CXR boxes and anatomy masks.
+  name: VinDr-CXR
+  source: https://physionet.org/content/vindr-cxr/1.0.0/
+  license: PhysioNet Credentialed Health Data License 1.5.0
+  redistribution: prohibited          # do not commit or upload image data
+  annotators_per_training_image: 3    # independent, no consensus
+
+supervision_modes:
+  # Reported separately. Spec §2: "Hai chế độ giám sát, báo cáo riêng".
+  qa_only:
+    use_boxes: false
+    use_anatomy: false
+  qa_full:
+    use_boxes: true
+    use_anatomy: true
+    primary: true
+
+split:
+  # BY IMAGE. Each image carries 3-5 questions; a question-level split
+  # leaks the radiograph.
+  by: image
+  seed: 1337
+  val_fraction: 0.1
+  test_fraction: 0.1
+  # Held-out images must be absent from detector pre-training, teacher
+  # fine-tuning AND KD target generation. Enforced by
+  # evidencekd.data.splits.assert_images_held_out at each stage entry.
+  enforce_held_out_at_every_stage: true
+
+image:
+  long_side: 1024        # spec §2: resize long edge, keep aspect ratio
+  keep_aspect_ratio: true
+  # Box coordinates are in ORIGINAL pixel space in <loc_...> tokens and must
+  # be rescaled with the image, not before it.
+  rescale_boxes_with_image: true
+
+text:
+  max_question_tokens: 48   # spec §2
+
+box_fusion:
+  # Only applies in QA+Full mode, where the 3 independent radiologist
+  # annotations must be reconciled. Decision D4.
+  method: cluster_mean      # greedy single-linkage then coordinate mean
+  iou_threshold: 0.4
+  min_raters: 1
+  # n_raters is KEPT on every fused region, not averaged away: inter-rater
+  # agreement is the natural SUPPORTED / INSUFFICIENT signal.
+
+validation:
+  # scripts/validate_data.py must report, never silently drop:
+  report:
+    - samples_per_split
+    - images_decoded_ok
+    - missing_or_empty_fields
+    - unmapped_class_names        # our label space vs the real CSV
+    - boxes_outside_image_bounds
+    - degenerate_boxes
+    - duplicate_images_by_pixel_hash
+    - question_type_distribution
+    - answer_length_distribution
+    - grounded_vs_ungrounded_counts
+    - positive_negative_balance
+    - inter_rater_agreement        # QA+Full only
+  # Any filter that drops samples must be configured and counted here.
+  filters: []

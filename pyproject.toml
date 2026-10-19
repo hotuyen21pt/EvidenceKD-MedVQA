@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evidencekd-medvqa"
+version = "0.1.0"
+description = "EvidenceKD-MedThink v4.1 — evidence-grounded medical VQA via counterfactual region distillation and claim-level rationale filtering"
+requires-python = ">=3.10"
+# Deliberately empty. The research logic (schema parsing, box fusion, the
+# KD-R arithmetic, claim grammar, Answer Lock, splits) is pure Python so the
+# test suite runs on a machine with no CUDA and no torch — which is the
+# development machine here. Torch lives in the `train` extra and is imported
+# lazily by the modules that need it.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+# Installed on Kaggle, not locally.
+train = [
+    "torch>=2.2.0",
+    "torchvision>=0.17.0",
+    "transformers>=4.46.0",
+    "accelerate>=1.0.0",
+    "peft>=0.13.0",
+    "datasets>=2.19.0",
+    "pillow>=10.0.0",
+    "numpy>=1.26.0",
+    "pyyaml>=6.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "--doctest-modules"

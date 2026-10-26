@@ -33,6 +33,7 @@ train = [
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# ../VinDR-CXR-VQA supplies vindr_cxr_vqa (data readers + the Tables 4-6 scorer).
+pythonpath = ["src", "../VinDR-CXR-VQA"]
 testpaths = ["tests"]
 addopts = "--doctest-modules"

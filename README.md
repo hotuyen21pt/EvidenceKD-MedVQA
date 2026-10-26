@@ -7,9 +7,14 @@ citation constraint; a verifier checks each claim.
 Implementation of the method spec `docs/method_spec_v4.1.md` (CV2 —
 EvidenceKD-MedThink v4.1).
 
-> **Status: early implementation. No model has been trained. No result exists.**
-> Every number in the spec's result tables is still blank, and nothing in this
-> repository should be read as an experimental finding.
+> **Status: stage 0 (detector) is runnable on Kaggle; nothing has been trained
+> yet.** Every number in the spec's result tables is still blank, and nothing
+> in this repository should be read as an experimental finding.
+
+**Design for this repository on VinDr-CXR-VQA:**
+[`docs/superpowers/specs/2026-10-26-vindr-cxr-vqa-on-evidencekd-design.md`](docs/superpowers/specs/2026-10-26-vindr-cxr-vqa-on-evidencekd-design.md)
+— keeps the sibling repo's purpose (answer + `<loc>` box + reasoning, scored by
+its Tables 4–6, one-image UI) and realises it with the EvidenceKD flow.
 
 ---
 
@@ -17,21 +22,74 @@ EvidenceKD-MedThink v4.1).
 
 | | |
 |---|---|
-| Research logic (schema, fusion, KD-R math, claim grammar, Answer Lock, splits) | **Implemented, 151 tests passing** |
-| Model code (encoders, detector, heads, generator, verifier) | **Not written** |
-| Teacher (MedGemma) integration | **Not written** |
-| Training loops | **Not written** |
-| Data on disk | **No** — dataset not yet downloaded |
-| Any training run | **No** |
-| Any reported metric | **No** |
+| Research logic (schema, fusion, KD-R math, claim grammar, Answer Lock, splits) | **Implemented, tested** |
+| Data on disk | **Yes** — `data/processed/` built from `../VinDR-CXR-VQA` with `--disjoint-test` (3,735 / 359 / 300 images) |
+| Bridge to VinDr's Tables 4–6 scorer | **Implemented, tested** (oracle replay scores P=1.0, 100 % IoU≥0.5 through `vindr_cxr_vqa.evaluate`) |
+| Stage 0: Faster R-CNN detector, train/predict/eval, Kaggle notebooks + bundles | **Implemented, not yet run** (no GPU here) |
+| Stages 1–3 (decision branch, teacher/KD, generator, verifier) | **Not written** |
+| Any training run / any reported metric | **No** |
 
 ```
 $ python -m pytest -q
-151 passed in 0.15s
+180 passed in 2.14s
 ```
 
 Run on MSYS2 CPython 3.14.3, no GPU, no torch installed. That is deliberate —
 see [Why the core is torch-free](#why-the-core-is-torch-free).
+
+---
+
+## Running stage 0 on Kaggle
+
+Everything below mirrors the sibling repo's workflow: bundles are built by a
+script, notebooks are generated, inputs are located wherever Kaggle nests them,
+internet-off is detected, and training checkpoints every epoch so it can be
+resumed across sessions.
+
+```bash
+# once, locally (no torch needed for any of this)
+python scripts/build_data.py                              # data/processed + reports/split_manifest.json
+python scripts/fetch_weights.py                           # weights/fasterrcnn_resnet50_fpn_coco-*.pth (160 MB)
+python scripts/make_kaggle_bundle.py --part code          # outputs/evidencekd-kaggle-code.zip    (~45 MB)
+python scripts/make_kaggle_bundle.py --part weights       # outputs/evidencekd-kaggle-weights.zip (160 MB)
+python scripts/make_kaggle_bundle.py --part images        # outputs/evidencekd-kaggle-images.zip  (4,394 PNG, ~360 MB)
+python scripts/make_kaggle_bundle.py --part images --all-images   # all 15,000 PNG (~1.3 GB) — better detector
+```
+
+1. **kaggle.com/datasets → New Dataset** → upload `evidencekd-kaggle-code.zip`.
+   Same for the weights zip, and for an images zip unless the `vpa-repo`
+   dataset (same layout) is already on Kaggle.
+2. **Code → New Notebook → File → Import Notebook** →
+   `notebooks/kaggle_stage0_detector.ipynb`. Import before attaching anything.
+3. *Add Input* → the code dataset, the images dataset, the weights dataset.
+4. *Settings* → **Accelerator: GPU T4 x2** (or P100). Run all.
+
+The notebook: locates inputs → checks the attached code is current → writes
+`configs/kaggle.yaml` (paths, batch size by VRAM, `image_source: all` when the
+15,000 PNGs are attached) → preflight → **bridge self-test** (answer key
+through the EvidenceKD → VinDr scorer path must be perfect) → trains →
+predicts val/test → scores mAP, Grounding@0.5 and VinDr's Tables 4–6 for the
+detector-only baseline B7 next to the paper's numbers → overlays → zips
+`detector.pt` + newest checkpoint + reports as `evidencekd-detector.zip`.
+
+To continue a run in a later session, attach that zip as an input: the train
+cell copies its checkpoints back and `--resume auto` picks the newest.
+`notebooks/kaggle_stage0_predict.ipynb` runs a finished detector on val/test
+and on any image of your own.
+
+```bash
+# the same steps, locally, on a machine with torch + a GPU
+python -m evidencekd.preflight --config configs/detector.yaml
+python -m evidencekd.eval.stage0 --config configs/detector.yaml --oracle --split val
+python -m evidencekd.models.detector train --config configs/detector.yaml --resume auto
+python -m evidencekd.models.detector predict --config configs/detector.yaml --checkpoint outputs/detector/detector.pt --split test
+python -m evidencekd.eval.stage0 --config configs/detector.yaml --detections outputs/detections_test.json --split test
+```
+
+`vindr_cxr_vqa` (the sibling package: CSV readers, `<loc>` parsing, the
+Tables 4–6 scorer) is imported from `../VinDR-CXR-VQA` — `pyproject.toml`
+adds it to the pytest path, and the code bundle ships a copy. It is not
+vendored into `src/`.
 
 ---
 
@@ -95,6 +153,10 @@ Each of these is a correction someone is likely to "fix" back.
 | **`LockedAnswer` is a guarded class, not `frozen=True`** | `frozen=True` raises a bare `FrozenInstanceError` that says nothing about why. The custom `__setattr__` names the rule being enforced. |
 | **A generator disagreeing with the locked answer produces a *warning*, never a correction** | Spec §2: the decision branch owns the answer. Abstention, if wanted, is a separate branch with its own threshold — not the generator quietly concluding something else. |
 | **Splitting is by image, never by question** | Each image carries 3–5 questions. A question-level split puts questions about the same radiograph in train and test. |
+| **The split is VinDr's (seed 42, 85/15, stratified by rarest class) with `--disjoint-test`, not the 10/10 seed-1337 default of `data/splits.py`** | Train is then identical to the paper reproduction, so the B4 row is comparable; test is carved out of val so thresholds can be chosen on val before test is opened (spec §8). The paper's 659-image "val" is val∪test and is reported only as paper-comparable. Manifest hash in `reports/split_manifest.json`. |
+| **Region boxes are VinDr's `boxes_fused` at IoU 0.3, not `data/boxes.fuse_boxes` at 0.4** | `gt_location_fixed` — the supervision box — was chosen from exactly that fused set; re-fusing at another threshold would make the target box and the candidate regions disagree. `n_raters = votes` is kept. |
+| **The detector never flips images horizontally** | Image-left is the patient's right; a flip silently mirrors every laterality fact. |
+| **No box is fabricated when the detector is silent** | `vindr_bridge.compose` emits no `<loc>` for a question with no box above threshold. VinDr's scorer reports `with_loc_pct`; a fabricated centred box would hide a localisation failure as a bad one. |
 | **`parse_count` trusts number words only for `How_many`** | "three times larger" is not a count. Digits are trusted anywhere; words are not. |
 | **The core is torch-free** | See below. |
 
@@ -116,9 +178,11 @@ Training runs on Kaggle. Do not move a torch import to module level.
 
 ```
 src/evidencekd/
-  labels.py                 VinDr class names, case-insensitive canonicalisation
+  labels.py                 VinDr class names; the 14 VQA classes + synonyms (VQA_CLASSES)
   data/
     vqa_schema.py           VinDr-CXR-VQA records, <loc_...> parsing
+    vindr_processed.py      reader for ../VinDR-CXR-VQA's built data (JSONL + images.json)
+    detection_dataset.py    detector samples from the VinDr CSVs (torch half lazy)
     answer_norm.py          THE answer normalisation rule (Yes/No, finding, side, count)
     boxes.py                IoU, multi-radiologist box fusion, Recall@K
     splits.py               split-by-image, leakage guards, split manifest hash
@@ -128,10 +192,28 @@ src/evidencekd/
     kd_r.py                 counterfactual relevance, null-slot softmax, gated KL
     kd_c.py                 claim-level filtering (none / sample / claim), KD-C loss
   inference/answer_lock.py  Answer Lock, Evidence Pointer, NO_SUPPORT
-  models/ teacher/ eval/    not yet implemented
-tests/                      151 tests, no GPU required
+  models/detector.py        stage 0: Faster R-CNN R50-FPN train / predict / resume (torch)
+  eval/
+    detection.py            class-aware mAP (pure Python)
+    vindr_bridge.py         EvidenceKD output -> VinDr prediction string -> Tables 4-6
+    stage0.py               CLI: mAP + Grounding@IoU + VinDr tables for a detector
+  preflight.py              packages, GPU, data, weights, scorer — before any GPU time
+  utils/config.py           YAML config with a PyYAML-free fallback
+  teacher/                  not yet implemented
+scripts/
+  build_data.py             vindr build_dataset --disjoint-test -> data/processed
+  fetch_weights.py          COCO Faster R-CNN weights for offline Kaggle
+  make_kaggle_bundle.py     code / images / weights / all / repo zips
+  make_notebooks.py         generates notebooks/*.ipynb from notebook_cells.py
+notebooks/
+  kaggle_stage0_detector.ipynb   train + score on Kaggle
+  kaggle_stage0_predict.ipynb    run a trained detector, ask on one image
+configs/
+  detector.yaml             stage 0 hyper-parameters (all untuned)
+tests/                      180 tests, no GPU required
 docs/
   method_spec_v4.1.md       the method specification this implements
+  superpowers/specs/        the design of this repo on VinDr-CXR-VQA (2026-10-26)
   implementation_audit.md   Phase 0 environment/data audit
   experiment_plan.md        milestones and entry conditions
 ```
@@ -155,25 +237,29 @@ examples in the docstrings are tests too.
 
 ## What is NOT done
 
-Being explicit, because the gap is large:
+Being explicit, because the gap is still large:
 
-- **No model code.** Vision encoder, text encoder, fusion, question-conditioned
-  Deformable DETR, region/evidence encoders, answer heads, generator and
-  verifier are all unwritten.
-- **No teacher.** MedGemma is named in the spec but not integrated, and its
-  answer-logprob access has not been verified. KD-R is undefined without it.
-- **No training loops, no checkpointing, no resume.**
-- **No data.** The dataset has not been downloaded; the schema above is from
-  the published dataset card, not from files on disk.
-- **No evaluation.** None of Tables A–F has a single value.
+- **Only stage 0 has model code** (the Faster R-CNN detector). Text encoder,
+  fusion, region/evidence encoders, answer heads, pointer, generator and
+  verifier are unwritten — see the design doc §10 for the file plan.
+- **No teacher integration.** The design names the sibling repo's MedGemma
+  LoRA adapter as teacher and B4, but ``teacher/`` is empty and its
+  answer-logprob access has not been exercised. KD-R is undefined without it.
+- **No training run has happened.** The stage-0 notebook is generated and
+  tested for syntax and freshness, not executed — this machine has no GPU.
+- **No evaluation number exists.** The only scores on disk are the oracle
+  bridge self-test (which must be perfect by construction).
 - **No clinician annotation.** The spec calls for 800–1000 claims double-read
   with a reported kappa. Not started, not budgeted.
 
 Known risks worth naming now:
 
-- **Question-conditioned Deformable DETR** needs a custom CUDA kernel;
-  building it offline on Kaggle is fragile. A pure-PyTorch fallback exists but
-  is slow.
+- **The detector sees 224 px images** (the local VinDr copy is pre-resized);
+  stage 0 upsamples to 512 px inside the model. Expect lower mAP than
+  full-resolution VinDr-CXR results, and treat that as a measured limit.
+- **Question-conditioned Deformable DETR** (the spec's detector) needs a
+  custom CUDA kernel; building it offline on Kaggle is fragile. The design
+  substitutes torchvision Faster R-CNN with a relevance head after fusion.
 - **KD-R cost.** One teacher pass per region per question. This must be
   sharded, cached and resumable before any full run, and budgeted first.
 - **Self-evaluation bias.** If one verifier both filters KD-C targets and

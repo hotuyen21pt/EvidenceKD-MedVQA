@@ -1,61 +1,18 @@
-# --- Data: never commit. VinDr-CXR is PhysioNet credentialed and
-# --- redistribution is prohibited. VinDr-CXR-VQA is CC BY 4.0 but large.
-# Root-anchored: a bare "data/" would also swallow src/evidencekd/data/.
-/data/
-/derived/
-*.dcm
-*.dicom
-*.png
-*.jpg
-*.jpeg
-*.npy
-*.npz
-*.parquet
-*.arrow
-
-# --- Model artefacts
-checkpoints/
-*.pt
-*.pth
-*.ckpt
-*.safetensors
-*.bin
-
-# --- Teacher / KD caches (regenerable, large)
+# Built artefacts — regenerate with `python scripts/build_data.py`
+data/processed/
+data/raw/
+derived/
 cache/
-kd_targets/
-teacher_cache/
+outputs/
+weights/
 
-# --- Kaggle offline bundle
-kaggle_offline_upload/
-kaggle_offline_upload.zip
-wheelhouse/
+# The VinDr-CXR images live in the sibling repo (PhysioNet credentialed; never commit)
+dataset/
 
-# --- Credentials. Never.
-kaggle.json
-.env
-*.key
-*.pem
-
-# --- Python
 __pycache__/
 *.py[cod]
-*.egg-info/
-build/
-dist/
-.venv/
-venv/
 .pytest_cache/
-.ruff_cache/
-.mypy_cache/
-
-# --- Reports: keep the schema, not the runs
-reports/*.json
-reports/runs/
-!reports/.gitkeep
-
-# --- Editors / OS
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
+.ipynb_checkpoints/
+*.egg-info/
+.venv/
+*.pdf

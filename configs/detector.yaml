@@ -1,0 +1,67 @@
+# Stage 0 — detector pre-training on VinDr-CXR (design §7.1, spec §4.5).
+#
+# Every value here is a CONFIGURED CHOICE, not a tuned optimum. Thresholds
+# are selected on val only; test is opened once (spec §8).
+
+paths:
+  # The VinDr-CXR copy: annotations_train.csv, image_labels_train.csv,
+  # train_data/train/*.png (+ resize_factors.csv). Same layout as the sibling
+  # repository and as the Kaggle dataset `vpa-repo`.
+  dataset_dir: ../VinDR-CXR-VQA/dataset
+  # Built by scripts/build_data.py (= vindr build_dataset --disjoint-test).
+  processed_dir: data/processed
+  output_dir: outputs
+  reports_dir: reports
+
+data:
+  # Which images train the detector. The VQA val/test images are ALWAYS held
+  # out (assert_images_held_out, stage="detector_pretrain").
+  #   vqa_train  — the 3,735 VQA training images only
+  #   all        — every VinDr-CXR train-partition PNG present on disk
+  #                (15,000 when the full copy is attached) minus held-out
+  image_source: all
+  # Images with no box of any VQA class are kept as background at this ratio
+  # to images with boxes (0 = drop them).
+  normal_ratio: 1.0
+  # IoU at which the three radiologists' boxes of one lesion are fused.
+  # 0.3 matches vindr build.fuse_iou, so these boxes coincide with
+  # gt_location_fixed. Design §5.3.
+  fuse_iou: 0.3
+  min_votes: 1
+  # Only the 14 VQA classes are trained (labels.VQA_CLASSES).
+  classes: vqa14
+
+model:
+  arch: fasterrcnn_resnet50_fpn      # torchvision, no custom CUDA kernels
+  # The 224 px PNG is upsampled inside the model's transform to this size.
+  min_size: 512
+  max_size: 512
+  # COCO-pretrained weights file (fasterrcnn_resnet50_fpn_coco-258fb6c6.pth),
+  # fetched by scripts/fetch_weights.py and attached on Kaggle as a dataset.
+  # Empty / missing -> train from scratch (preflight warns).
+  coco_weights: weights/fasterrcnn_resnet50_fpn_coco-258fb6c6.pth
+  trainable_backbone_layers: 3
+  box_detections_per_img: 50
+  box_score_thresh: 0.05
+  box_nms_thresh: 0.5
+
+train:
+  epochs: 8
+  batch_size: 8
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 1.0e-4
+  warmup_iters: 500
+  lr_milestones: [6]      # x0.1 at these epochs
+  amp: true
+  num_workers: 2
+  seed: 42
+  save_every_epoch: true
+  log_every: 50
+
+eval:
+  # Detections kept for mAP / Table B / the B7 bridge.
+  score_threshold: 0.3
+  iou_threshold: 0.5       # Grounding@IoU
+  gt_source: fused         # fused | raw, for mAP
+  max_boxes_per_question: 1

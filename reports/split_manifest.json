@@ -1,0 +1,9 @@
+{
+  "sizes": {
+    "train": 3735,
+    "val": 359,
+    "test": 300
+  },
+  "sha256": "13b6132b2c6e389c3176860c3d0cd1184477db53e2c7b572f9e7b0e93a440700",
+  "source": "vindr_cxr_vqa.build_dataset --disjoint-test (seed 42, val_ratio 0.15, test_size 300)"
+}

@@ -214,6 +214,182 @@ predict) nên React UI của VinDR dùng được ngay; thêm trường `evidenc
 `Runner` trong `inference/pipeline.py` chạy detector → decision → pipeline cho
 một ảnh tải lên.
 
+### Ví dụ bằng số: một câu hỏi đi hết pipeline
+
+Bản ghi thật `06b2ff94bd0270f543deb7074c2a006a_1` của tập val. Mọi con số về
+dữ liệu, hộp, nhãn, bảng dữ kiện và quy đổi tọa độ là **tính thật** bằng mã của
+repo; các con số đầu ra của mạng nơ-ron (logit, xác suất, logprob của teacher)
+là **ví dụ minh họa** đúng kích thước và đúng công thức, vì chưa có lần train nào.
+
+**Đầu vào.** Ảnh gốc 2500×3012 px, PNG trên đĩa 224×224 → `fx = 224/2500 = 0,0896`,
+`fy = 224/3012 = 0,0744`. Câu hỏi `Where is the Pulmonary fibrosis?` (`type = Where`,
+`gt_finding = Pulmonary fibrosis`). Câu trả lời công bố:
+`"The fibrotic changes … within the specified region <loc_2052_1893_2311_1950>."`
+Hộp công bố = hộp sửa = `(2052, 1893, 2311, 1950)` (`repair_method = published`).
+Ảnh này có 5 câu hỏi (How_many, Where, Is_there, Which, Yes_No), cùng một hộp.
+
+**Hộp của bác sĩ trên ảnh (`boxes_raw`)** — ba người đọc R8, R9, R10:
+
+| Lớp | Bác sĩ | Hộp (pixel gốc) |
+|---|---|---|
+| Pulmonary fibrosis | R10 | (2045, 1892, 2276, 1964) |
+| Pulmonary fibrosis | R8 | (2052, 1893, 2312, 1950) ← chính là hộp công bố |
+| Pulmonary fibrosis | R9 | (2062, 1874, 2289, 1970) |
+| Pulmonary fibrosis | R8 | (472, 826, 598, 1088) |
+| ILD | R10 | (316, 768, 733, 2285) |
+| Aortic enlargement | R9 | (1293, 887, 1577, 1190) |
+
+**Gộp (IoU ≥ 0,3, trung bình tọa độ) → `boxes_fused`**, sắp theo `votes` rồi diện tích,
+thành vùng ứng viên `R01..R04` + giải phẫu (fallback: `A_thorax` = cả ảnh):
+
+| Vùng | Lớp | votes | Hộp pixel gốc | Hộp 224 px (`× fx, × fy`) |
+|---|---|---|---|---|
+| R01 | Pulmonary fibrosis | 3 | (2053,0, 1886,5, 2292,2, 1961,4) | (184,0, 140,3, 205,4, 145,9) |
+| R02 | ILD | 1 | (315,9, 768,1, 733,2, 2284,8) | (28,3, 57,1, 65,7, 169,9) |
+| R03 | Aortic enlargement | 1 | (1292,6, 887,1, 1576,6, 1190,2) | (115,8, 66,0, 141,3, 88,5) |
+| R04 | Pulmonary fibrosis | 1 | (472,0, 826,5, 597,6, 1088,1) | (42,3, 61,5, 53,5, 80,9) |
+| A_thorax | — | — | (0, 0, 2500, 3012) | (0, 0, 224, 224) |
+
+**Vùng đích của câu hỏi** = vùng cùng lớp có IoU ≥ 0,5 với hộp sửa:
+
+```
+IoU(R01, gt): giao x [2053,0 ; 2292,2] = 239,2   giao y [1893 ; 1950] = 57,0   → giao = 13 634
+              |gt| = 259 × 57 = 14 763    |R01| = 239,2 × 74,9 = 17 916
+              IoU = 13 634 / (14 763 + 17 916 − 13 634) = 13 634 / 19 045 = 0,716  ✓  (R04: 0,0)
+→ target_regions = ("R01",)
+```
+
+**Nhãn huấn luyện (`labels_train.jsonl`)**, tính hình học từ hộp của lớp được hỏi:
+
+```
+question_type = 0 (Where)      yes_no = 1
+findings      = [0,1,0,0,1,0,0,0,0,0,0,1,0,0]   # lớp 1 PF, 4 Aortic enlargement, 11 ILD có hộp
+side          = 2 (bilateral)  # tâm R01 x = 2172 > đường giữa 1250 → "left" (ảnh-phải = bệnh nhân-trái);
+                               # tâm R04 x = 535 < 1250 → "right"; hai bên → bilateral
+count         = 2              # 2 hộp PF sau NMS
+target_regions = ["R01"]       asked_class = 1
+```
+
+**Bảng dữ kiện (`facts/build`)** cho ảnh này, nếu nhánh quyết định báo có PF, AE, ILD
+và điểm toàn ảnh của Pneumothorax = 0,02 < ngưỡng vắng mặt 0,3:
+
+```
+F1: presence Aortic enlargement [R03]      F2: side left [R03, A_thorax]        F3: count 1 [R03]
+F4: presence ILD [R02]                     F5: side right [R02, A_thorax]       F6: count 1 [R02]
+F7: presence Pulmonary fibrosis [R01, R04] F8: side bilateral [R01, R04, A_thorax]  F9: count 2 [R01, R04]
+F10: co_occurrence Aortic enlargement with ILD [R03, R02]
+F11: co_occurrence Aortic enlargement with Pulmonary fibrosis [R03, R01, R04]
+F12: co_occurrence ILD with Pulmonary fibrosis [R02, R01, R04]
+F13: absence Pneumothorax [A_thorax]
+```
+(Không có `zone`/`extent` vì giải phẫu fallback không có hộp phổi; không có `ctr` vì không biết tư thế chụp.)
+
+**Decision branch — kích thước tensor** (batch 1):
+
+```
+ảnh          [3, 224, 224] ──transform──▶ [3, 512, 512]   (tỉ lệ 512/224 = 2,286)
+FPN          '0' [256,128,128]  '1' [256,64,64]  '2' [256,32,32]  '3' [256,16,16]
+hộp R01 ở 512 px = (420,5, 320,7, 469,5, 333,5); hộp mở rộng ×1,5 = (408,3, 317,5, 481,8, 336,7)
+ROIAlign     mỗi vùng: 2 × [256, 7, 7] = 2 × 12 544 ──Linear──▶ 2 × 256 ──merge──▶ 256
+token vùng   = roi + emb_loại(finding) + emb_lớp(PF) + Linear(tọa độ chuẩn hóa) → [256]
+tokens       [1 + 5, 256]      (IMG, R01, R02, R03, R04, A_thorax)
+câu hỏi      "where is the pulmonary fibrosis" → ids [CLS, where, is, the, pulmonary, fibrosis] → [6, 256]
+fusion ×2    vùng ↔ câu hỏi (cross-attention 8 head), evidence encoder ×2 trên [6 + 6, 256]
+q_pool       trung bình 6 token câu hỏi → [256];   regf = 4 vùng finding → [4, 256]
+```
+
+**Heads — ví dụ đầu ra và loss** (số minh họa):
+
+```
+relevance logits  [ 2,1  −1,3  −0,4   0,2 ]  → σ = [0,89  0,21  0,40  0,55]
+   L_rel = BCE với nhãn [1,0,0,0] = (0,117 + 0,236 + 0,511 + 0,799) / 4 = 0,416
+
+finding probs     PF 0,93   AE 0,72   ILD 0,61   còn lại < 0,10   (ngưỡng tune = 0,5 → có mặt: PF, AE, ILD)
+yes/no            [0,06  0,94]      side [left 0,12  right 0,08  bilateral 0,80]      count [0,05 0,20 0,65 0,07 0,03]
+
+pointer logits    [ 1,8  −0,9  −0,2   0,3 | null −1,0 ]
+   exp            [6,05  0,41  0,82  1,35 | 0,37]   tổng 8,99
+   π^S            [0,673 0,045 0,091 0,150 | 0,041]
+   L_pointer = −log Σ_{G={R01}} π = −log 0,673 = 0,396
+
+alignment cos(q, z_i) = [0,62 0,10 0,21 0,35], τ = 0,07 → /τ = [8,86 1,43 3,00 5,00]
+   L_align = −log( e^8,86 / (e^8,86 + e^1,43 + e^3,00 + e^5,00) ) = −log(7040 / 7213) = 0,024
+
+Evidence Pointer lúc suy luận: top_k = 3, min_p = 0,05, phải > null 0,041
+   → region_ids = [R01 (0,673), R04 (0,150), R03 (0,091)], status SUPPORTED
+```
+
+**Teacher KD-R** (`a*` = câu trả lời công bố bỏ `<loc>`; logprob trung bình/token; số minh họa):
+
+```
+log p_T(a* | ảnh gốc)            = −0,42
+log p_T(a* | che R01)            = −0,95   → r_1 = max(0, −0,42 − (−0,95)) = 0,53
+log p_T(a* | che R02)            = −0,44   → r_2 = 0,02
+log p_T(a* | che R03)            = −0,40   → r_3 = max(0, −0,02) = 0      (che làm teacher TỰ TIN HƠN → cắt về 0)
+log p_T(a* | che R04)            = −0,50   → r_4 = 0,08
+r_∅ = 0
+
+τ_T = 1,0 (configs/kd_r.yaml):  π^T = softmax([0,53 0,02 0 0,08 | 0]) = [0,293 0,176 0,172 0,187 | 0,172]
+   khối lượng trên vùng đích R01 = 0,293 < δ = 0,5  → cổng KHÔNG qua (gate_reason = mass_below_delta) → w = 0
+τ_T = 0,2:                      π^T = softmax([2,65 0,10 0 0,40 | 0]) = [0,755 0,059 0,053 0,080 | 0,053]
+   m = 0,755 ≥ 0,5; teacher đúng (câu sinh ra có "pulmonary fibrosis"); c = exp(−0,42) = 0,657 → w = 0,657
+   KL(π^T ‖ π^S) = Σ p log(p/q)
+     = 0,755·ln(0,755/0,673) + 0,059·ln(0,059/0,045) + 0,053·ln(0,053/0,091) + 0,080·ln(0,080/0,150) + 0,053·ln(0,053/0,041)
+     = 0,087 + 0,016 − 0,029 − 0,050 + 0,014 = 0,037
+   L_KD-R (một mẫu) = w·KL / (w + ε) = 0,037
+```
+Hai dòng τ_T cho thấy vì sao README đòi **báo cáo `r_null` và τ_T cùng mọi kết quả KD-R**:
+chúng quyết định mẫu nào qua cổng.
+
+**Faithfulness giai đoạn 2** (che *token* từng vùng trong evidence encoder, logit PF):
+
+```
+logit PF đầy đủ = 2,6  (log σ = −0,072)
+bỏ R01 → 0,9 (log σ = −0,341) → sụt 0,270      bỏ R02 → 2,5 → 0,006
+bỏ R03 → 2,55 → 0,003                           bỏ R04 → 2,2 (log σ = −0,105) → 0,034
+π^cf = softmax([0,270 0,006 0,003 0,034 | 0]) = [0,245 0,188 0,187 0,193 | 0,187]
+L_faith = KL(π^cf ‖ π^S) ≈ 0,49  → kéo pointer về phía vùng mà chính mạng dựa vào khi quyết định
+```
+
+**Suy luận và chuỗi cầu nối** cho câu hỏi này (generator mẫu câu B9, verifier luật):
+
+```
+decide():   type Where; finding được hỏi = "Pulmonary fibrosis" (có trong câu hỏi); có mặt (0,93 ≥ 0,5)
+            side = bilateral (0,80); findings_present = [PF, AE, ILD]
+locked answer:  "Pulmonary fibrosis is seen bilaterally."
+dữ kiện chọn:   về PF → F7, F8, F9, F11, F12; trích vùng pointer R01/R04/R03 → thêm F1, F2, F3
+mệnh đề:  <obs facts=F7> Pulmonary fibrosis is present. [R01] </obs>        → supported
+          <obs facts=F8> The finding is bilateral. [R01] </obs>             → supported
+          <obs facts=F9> There are 2 lesions. [R01] </obs>                  → supported
+          <obs facts=F11> Aortic enlargement co-occurs with Pulmonary fibrosis. [R03] </obs> → supported
+          Pulmonary fibrosis involves irreversible scarring of the lung tissue…  (background, từ `reason`)
+hộp trả lời = vùng pointer đầu tiên cùng lớp = R01 = (2053,0, 1886,5, 2292,2, 1961,4)
+norm1000:   x·999/2500 = ×0,3996 ; y·999/3012 = ×0,3317
+            2053,0→820   1886,5→626   2292,2→916   1961,4→651   → <loc_820_626_916_651>
+chuỗi:      "Pulmonary fibrosis is seen bilaterally <loc_820_626_916_651>. Reasoning: Pulmonary fibrosis is present.
+             The finding is bilateral. There are 2 lesions. Aortic enlargement co-occurs with Pulmonary fibrosis."
+```
+(Hộp sửa của đề bài quy đổi là `<loc_820_628_923_647>`; hai chuỗi khác nhau vài đơn vị vì
+R01 là hộp **đồng thuận** còn `gt_location` là hộp của một bác sĩ.)
+
+**Scorer VinDr chấm chuỗi đó** (ảnh này, cùng 4 câu hỏi còn lại trả lời tương tự):
+
+```
+Bảng 4  (theo ảnh, 14 lớp): các câu trả lời nêu PF, AE, ILD; hộp thô của ảnh có đúng 3 lớp đó
+        → TP 3, FP 0, FN 0, TN 11   (precision 1,0 · recall 1,0 cho ảnh này)
+Bảng 5  (hộp dự đoán vs hộp thô, IoU ≥ 0,3, match "any"):
+        IoU(R01, hộp R8) = 13 665 / (17 916 + 14 837 − 13 665) = 13 665 / 19 088 = 0,716 ≥ 0,3 → TP, mIoU_TP cộng 0,716
+Bảng 6  (theo ảnh): IoU tốt nhất 0,716 ≥ 0,5 → ảnh được tính "định vị tốt"
+Bảng B  (spec, theo câu hỏi): IoU(hộp trả lời, gt sửa) = 0,716 ≥ 0,5 → Grounding@.5 = 1; answer đúng → Answer&grounding = 1
+Bảng C  (spec): 4 observation, 4 supported → supported-claim P = 1,0; 4 mệnh đề nêu "Pulmonary fibrosis"? 3/4 → relevance 0,75
+```
+
+**Can thiệp (Bảng F)**: tô đen R01 trên PNG 224 px (hình chữ nhật (184, 140)–(205, 146)) và
+chạy lại nhánh quyết định; nếu xác suất PF rơi từ 0,93 xuống dưới 0,5 thì "đổi đáp án" = 1
+cho đối chứng `cited`; làm tương tự với R03 (`random`/`uncited_top`), `A_thorax`, và ô R01
+ghép từ ảnh khác (`other_image`). Hệ thống chỉ được gọi là faithful khi tỉ lệ đổi đáp án
+của `cited` vượt cả bốn đối chứng.
+
 ### Những gì tạo ra ở mỗi lần chạy Kaggle
 
 `evidencekd-full.zip` = `outputs/` (checkpoint cuối, detections, decision, pipeline),

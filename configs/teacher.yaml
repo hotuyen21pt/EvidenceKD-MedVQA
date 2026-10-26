@@ -1,0 +1,42 @@
+# Teacher = the sibling repository's MedGemma + LoRA adapter (design §7.4, §7.5).
+# It is B4 of the spec and the KD-R / KD-C teacher. Frozen; never shares
+# weights with generator L (which trains its own adapter, configs/generator.yaml).
+
+paths:
+  dataset_dir: ../VinDR-CXR-VQA/dataset
+  processed_dir: data/processed
+  derived_dir: derived
+  output_dir: outputs
+  cache_dir: cache                       # cache/kd_r/*.jsonl, cache/kd_c/*.jsonl
+
+model:
+  # MedGemma base directory or hub id, and the VinDr LoRA adapter directory.
+  # On Kaggle the notebook fills these from the attached Model + adapter zip.
+  name: google/medgemma-1.5-4b-it
+  adapter: ../VinDR-CXR-VQA/outputs/medgemma-lora-unzipped
+  attn_implementation: eager
+  torch_dtype: auto
+  load_in_4bit: null                     # null = 4-bit on GPUs under ~24 GB
+
+generation:
+  max_new_tokens: 256                    # B4 answers
+  rationale_max_new_tokens: 200
+  rationale_n: 3
+  rationale_temperature: 0.7
+
+kd_r:
+  # a* = released answer with <loc> removed (teacher/prompts.canonical_answer)
+  mask_method: constant_fill             # constant_fill | blur
+  fill_value: 0
+  blur_sigma: 8.0
+  max_regions: 8                         # finding regions masked (anatomy never masked)
+  tau: 1.0
+  r_null: 0.0
+  delta: 0.5                             # gate: teacher mass on the target region
+  subset_fraction: 1.0                   # 0.5 = half the training images (design Q3)
+  shard_size: 500
+  batch_images: 9                        # original + up to 8 masked images per forward
+
+kd_c:
+  granularity: claim                     # claim | sample | none
+  shard_size: 500

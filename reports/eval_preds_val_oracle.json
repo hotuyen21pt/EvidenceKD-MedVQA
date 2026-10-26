@@ -1,0 +1,121 @@
+{
+  "source": "preds_val_oracle.jsonl",
+  "split": "val",
+  "pred_space": "norm1000",
+  "coverage": {
+    "scored_images": 659,
+    "split_images": 659,
+    "strict": false
+  },
+  "format": {
+    "n_predictions": 2637,
+    "with_loc_span": 2601,
+    "with_loc_pct": 98.6,
+    "empty": 0,
+    "median_words": 33,
+    "sample": "Pulmonary fibrosis is seen bilaterally <loc_573_189_786_396>. Reasoning: Pulmonary fibrosis is present. The finding is bilateral. There are 3 lesions. Aortic enlargement co-occurs with Pulmonary fibrosis. Infiltration co-occurs with Pulmonary fibrosis. Pleural thickening co-occurs with Pulmonary fibrosis."
+  },
+  "vqa": {
+    "n_images": 659,
+    "accuracy": 0.9986,
+    "precision": 1.0,
+    "recall": 0.9943,
+    "f1": 0.9972,
+    "tp": 2278,
+    "fp": 0,
+    "fn": 13,
+    "tn": 6935,
+    "per_class": {
+      "Cardiomegaly": {
+        "precision": 1.0,
+        "recall": 0.9971,
+        "f1": 0.9985
+      },
+      "Pulmonary fibrosis": {
+        "precision": 1.0,
+        "recall": 0.9876,
+        "f1": 0.9937
+      },
+      "Lung Opacity": {
+        "precision": 1.0,
+        "recall": 0.9895,
+        "f1": 0.9947
+      },
+      "Pleural effusion": {
+        "precision": 1.0,
+        "recall": 0.9868,
+        "f1": 0.9933
+      },
+      "Aortic enlargement": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "Calcification": {
+        "precision": 1.0,
+        "recall": 0.9851,
+        "f1": 0.9925
+      },
+      "Other lesion": {
+        "precision": 1.0,
+        "recall": 0.9935,
+        "f1": 0.9968
+      },
+      "Pleural thickening": {
+        "precision": 1.0,
+        "recall": 0.99,
+        "f1": 0.995
+      },
+      "Infiltration": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "Pneumothorax": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "Nodule/Mass": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "ILD": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "Consolidation": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "Atelectasis": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    }
+  },
+  "detection": {
+    "iou_threshold": 0.3,
+    "match": "any",
+    "gt_source": "raw",
+    "precision": 1.0,
+    "recall": 0.4056,
+    "f1": 0.5771,
+    "miou_tp": 0.894,
+    "tp": 2601,
+    "fp": 0,
+    "fn": 3812,
+    "n_predicted_boxes": 2601,
+    "n_gt_boxes": 5561
+  },
+  "localization": {
+    "n_images": 659,
+    "iou_ge_0.5_pct": 99.85,
+    "iou_ge_0.3_pct": 99.85,
+    "mean_iou_all_preds": 0.894
+  }
+}

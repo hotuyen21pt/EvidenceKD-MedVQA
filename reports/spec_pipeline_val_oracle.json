@@ -1,0 +1,36 @@
+{
+  "split": "val",
+  "pipeline": "outputs/pipeline_val_oracle.jsonl",
+  "n_rows": 2637,
+  "table_a": {
+    "yes_no_f1": null,
+    "yes_no_note": "N/A: the release has no negative question",
+    "finding_macro_f1": 1.0,
+    "side_accuracy": 1.0,
+    "side_n": 367,
+    "count_mae": 0.0,
+    "count_n": 447,
+    "n_images": 659
+  },
+  "table_b": {
+    "grounding_at_iou": 0.9674,
+    "miou": 0.9049,
+    "answer_and_grounding": 0.9674,
+    "n": 2637,
+    "iou_threshold": 0.5
+  },
+  "table_c": {
+    "supported_claim_precision": 1.0,
+    "citation_precision": 1.0,
+    "citation_recall": 0.9697,
+    "coverage": 1.0,
+    "contradiction_rate": 0.0,
+    "question_relevance": 0.6069,
+    "conciseness_obs_per_sample": 5.3144,
+    "scorer": "machine (rule or learned verifier) \u2014 not clinician-scored"
+  },
+  "table_f": {
+    "ece_finding": 0.0,
+    "latency_s_per_question": 0.0005
+  }
+}

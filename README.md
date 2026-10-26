@@ -39,6 +39,28 @@ see [Why the core is torch-free](#why-the-core-is-torch-free).
 
 ---
 
+## Running the full pipeline on Kaggle
+
+`notebooks/kaggle_full_pipeline.ipynb` chains every stage in one notebook and
+resumes across sessions (attach the previous session's `evidencekd-full.zip`):
+
+| Stage | What runs | Needs attached |
+|---|---|---|
+| 0 | Faster R-CNN detector → detections → B7 Tables 4–6 | code zip, images, COCO weights |
+| derived | regions, anatomy (torchxrayvision if present), synthetic negatives, labels; **oracle self-test** through the bridge | — |
+| 1 | decision branch (relevance, finding, Yes/No, side, count, pointer) → thresholds on val∖test | — |
+| teacher | MedGemma + VinDr adapter: KD-R (region masking) + KD-C (rationales), sharded with a time budget | MedGemma (Kaggle Models) + `medgemma-lora.zip` |
+| 2 | decision branch + KD-R + faithfulness term | KD-R cache |
+| 3 | learned verifier (KD-C cache), generator S (flan-T5) | flan-t5-base dir |
+| eval | Proposed-S inference → spec Tables A–C/F, VinDr Tables 4–6, faithfulness interventions | — |
+
+Stages whose inputs are missing are skipped with a message; the template
+generator (B9) and the rule verifier are always available. The whole
+inference chain is exercised locally without torch by replaying the answer
+key (`evidencekd.inference.oracle_decisions` → `pipeline --generator template`
+→ `eval.vindr_tables`): VQA precision 1.0, 99.85 % of images at IoU ≥ 0.5,
+Grounding@0.5 0.967 (spec Table B) on val.
+
 ## Running stage 0 on Kaggle
 
 Everything below mirrors the sibling repo's workflow: bundles are built by a

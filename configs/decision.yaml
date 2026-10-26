@@ -1,0 +1,64 @@
+# Stages 1-2 — the decision branch (design §6, §7.1, §7.3, §7.4).
+# All values are configured choices, untuned. Thresholds are chosen on the
+# `tune` split (val minus test) and recorded in reports/thresholds.json.
+
+paths:
+  dataset_dir: ../VinDR-CXR-VQA/dataset
+  processed_dir: data/processed
+  derived_dir: derived              # regions_{split}.json, anatomy.json, background.json, negatives.jsonl
+  output_dir: outputs
+  reports_dir: reports
+  detector_checkpoint: outputs/detector/detector.pt     # stage 0 (frozen backbone + proposals)
+  kd_r_cache: cache/kd_r                                # teacher targets (stage 2)
+
+data:
+  mode: qa_full                     # qa_full | qa_only  (design §12.12: v1 trains qa_full)
+  max_regions: 8                    # finding regions per image (+ up to 4 anatomy)
+  region_iou_threshold: 0.5         # region answers the question when IoU >= this with gt_location_fixed
+  detector_score_threshold: 0.3     # inference regions (val/test)
+  use_anatomy: true
+  negatives: true                   # synthetic "No" questions (derived/negatives.jsonl), qa_full only
+  negatives_ratio: 0.5              # per released QA pair
+  max_question_tokens: 32
+
+text_encoder:
+  # "simple": word embeddings + 2 Transformer layers trained from scratch
+  #           (the questions are templated: 6 types x 14 findings).
+  # "hf":     a HuggingFace encoder directory attached offline, e.g. CXR-BERT
+  #           microsoft/BiomedVLP-CXR-BERT-specialized (MSR research licence).
+  kind: simple
+  hf_path: ""
+  freeze_hf: true
+
+model:
+  d: 256
+  roi_output: 7
+  expand_ratio: 1.5
+  fusion_layers: 2
+  evidence_layers: 2
+  heads: 8
+  dropout: 0.1
+  pointer_top_k: 3
+  pointer_min_probability: 0.05
+
+loss:
+  lambda_rel: 1.0
+  lambda_align: 1.0
+  lambda_answer: 1.0
+  lambda_pointer: 1.0
+  lambda_kd_r: 1.0          # stage 2
+  lambda_faith: 0.5         # stage 2, counterfactual on region tokens
+  align_tau: 0.07
+  kd_r_tau: 1.0
+
+train:
+  epochs_stage1: 6
+  epochs_stage2: 4
+  batch_size: 16
+  lr: 1.0e-4
+  weight_decay: 0.01
+  warmup_steps: 300
+  amp: true
+  num_workers: 2
+  seed: 42
+  log_every: 50

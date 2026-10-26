@@ -215,7 +215,7 @@ class TestNotebooks:
                            capture_output=True, text=True)
         assert r.returncode == 0, r.stdout
 
-    @pytest.mark.parametrize("name", ["kaggle_stage0_detector", "kaggle_stage0_predict"])
+    @pytest.mark.parametrize("name", ["kaggle_stage0_detector", "kaggle_stage0_predict", "kaggle_full_pipeline"])
     def test_cells_parse(self, name):
         nb = json.load(open(os.path.join(REPO, "notebooks", f"{name}.ipynb"), encoding="utf-8"))
         for i, cell in enumerate(nb["cells"]):

@@ -1,0 +1,46 @@
+# Stage 3 — verifier and generators (design §7.5, §7.6; spec §4.3, §4.5).
+
+paths:
+  dataset_dir: ../VinDR-CXR-VQA/dataset
+  processed_dir: data/processed
+  derived_dir: derived
+  output_dir: outputs
+  cache_dir: cache
+  reports_dir: reports
+
+generator_s:
+  # flan-T5-base directory (attached offline) or hub id. Text-only in v1.
+  model: google/flan-t5-base
+  targets: kd_c              # kd_c (filtered teacher claims) | template (B9, "S không KD") | kd_c_unfiltered
+  max_input_tokens: 384
+  max_target_tokens: 160
+  epochs: 5
+  batch_size: 16
+  lr: 3.0e-4
+  weight_decay: 0.01
+  warmup_steps: 200
+  num_beams: 2
+  max_new_tokens: 160
+  constrained_decoding: true
+
+generator_l:
+  # MedGemma + a NEW LoRA (never the teacher's adapter).
+  model: google/medgemma-1.5-4b-it
+  lora: {r: 16, alpha: 32, dropout: 0.1,
+         target_modules: [q_proj, k_proj, v_proj, o_proj], freeze_vision_tower: true}
+  epochs: 1
+  batch_size: 1
+  grad_accum: 16
+  lr: 2.0e-5
+  max_seq_length: 1024
+  max_new_tokens: 160
+  load_in_4bit: null
+  precision: auto
+
+verifier:
+  d: 256
+  epochs: 4
+  batch_size: 64
+  lr: 2.0e-4
+  negatives_per_claim: 2      # synthetic contradicted / insufficient per supported claim
+  max_tokens: 96

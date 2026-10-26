@@ -1,0 +1,14 @@
+paths:
+  dataset_dir: C:/Users/User1/Desktop/work/paper/VinDR-CXR-VQA/dataset
+  processed_dir: C:/Users/User1/Desktop/work/paper/EvidenceKD-MedVQA/data/processed
+  output_dir: C:/Users/User1/Desktop/work/paper/EvidenceKD-MedVQA/reports
+  vqa_json: data/raw/data_v1.json
+data:
+  box_source: fixed
+  loc_format: norm1000
+eval:
+  iou_threshold: 0.3
+  good_localization_iou: 0.5
+  acceptable_localization_iou: 0.3
+  match: any
+  max_new_tokens: 256

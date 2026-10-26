@@ -448,3 +448,241 @@ def write(nb: dict, path: str) -> None:
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(nb, f, indent=1, ensure_ascii=False)
         f.write("\n")
+
+
+# ===========================================================================
+# Full-pipeline notebook cells (stages 0-3 + evaluation in one session chain)
+# ===========================================================================
+FULL_NEEDS = r'''
+NEEDS.update({
+    "src/evidencekd/models/decision_branch.py": ["def train", "def predict"],
+    "src/evidencekd/data/build_regions.py": ["def main"],
+    "src/evidencekd/inference/pipeline.py": ["def run_split", "def tune_thresholds"],
+    "src/evidencekd/inference/oracle_decisions.py": ["def write_oracle"],
+    "src/evidencekd/eval/tables_spec.py": ["def compute"],
+    "src/evidencekd/eval/vindr_tables.py": ["def evaluate"],
+    "src/evidencekd/teacher/kd_r_targets.py": ["def generate_shard", "def gate_shards"],
+    "src/evidencekd/teacher/kd_c_targets.py": ["def generate_shard"],
+    "src/evidencekd/models/generator_s.py": ["def train"],
+    "src/evidencekd/models/verifier.py": ["def train"],
+})
+'''
+
+FULL_MODELS = r'''
+# Optional inputs for the later stages. Leave "" to auto-detect; a stage is
+# skipped (with a message) when its model is not attached.
+def _find_dir(markers, prefer=None):
+    for m in markers:
+        hits = find_inputs(m)
+        if prefer:
+            hits = sorted(hits, key=lambda h: (prefer not in h.lower(), h.count("/"), h))
+        if hits:
+            return hits[0]
+    return ""
+
+MEDGEMMA = MEDGEMMA or _find_dir(["config.json"], prefer="medgemma")
+if MEDGEMMA and not glob.glob(os.path.join(MEDGEMMA, "*.safetensors")):
+    MEDGEMMA = ""
+ADAPTER = ADAPTER or next((os.path.dirname(p) for p in glob.glob("/kaggle/input/**/adapter_config.json", recursive=True)
+                           if "checkpoint-" not in p), "")
+if not ADAPTER:
+    up = unpack("adapter_config.json")
+    if up:
+        ADAPTER = next((os.path.dirname(p) for p in glob.glob(os.path.join(up, "**/adapter_config.json"), recursive=True)
+                        if "checkpoint-" not in p), "")
+GEN_S_MODEL = GEN_S_MODEL or _find_dir(["spiece.model"], prefer="t5")
+print("MEDGEMMA   ", MEDGEMMA or "(none -> teacher / KD / generator L skipped)")
+print("ADAPTER    ", ADAPTER or "(none -> teacher skipped)")
+print("GEN_S_MODEL", GEN_S_MODEL or "(none -> generator S skipped; template generator only)")
+'''
+
+FULL_CONFIG = r'''
+from evidencekd.utils.config import load_config, dump_config
+OUT = "/kaggle/working/outputs"; REPORTS = "/kaggle/working/reports"; DERIVED = "/kaggle/working/derived"
+CACHE = "/kaggle/working/cache"
+for d in (OUT, REPORTS, DERIVED, CACHE):
+    os.makedirs(d, exist_ok=True)
+# bring back everything a previous session produced (evidencekd-full.zip attached as input)
+for sub in ("outputs", "reports", "derived", "cache"):
+    for p in glob.glob(f"/kaggle/input/**/evidencekd_full/{sub}", recursive=True):
+        shutil.copytree(p, f"/kaggle/working/{sub}", dirs_exist_ok=True); print("restored", p)
+for p in glob.glob("/kaggle/input/**/detector/detector.pt", recursive=True):
+    os.makedirs(os.path.join(OUT, "detector"), exist_ok=True)
+    if not os.path.exists(os.path.join(OUT, "detector", "detector.pt")):
+        shutil.copy2(p, os.path.join(OUT, "detector")); print("restored", p)
+
+vram = torch.cuda.get_device_properties(0).total_memory / 2**30 if torch.cuda.is_available() else 0
+CFG = {}
+common = {"dataset_dir": os.path.join(IMAGES_ROOT, "dataset"), "processed_dir": os.path.join(PROCESSED_ROOT, "data", "processed"),
+          "output_dir": OUT, "reports_dir": REPORTS, "derived_dir": DERIVED, "cache_dir": CACHE}
+for name in ("detector", "decision", "teacher", "generator"):
+    cfg = load_config(os.path.join(WORK, "configs", f"{name}.yaml"))
+    for k, v in common.items():
+        cfg["paths"][k] = v
+    if name == "detector":
+        cfg["model"]["coco_weights"] = WEIGHTS_PATH
+        cfg["train"]["batch_size"] = 8 if vram >= 14 else 4
+        cfg["data"]["image_source"] = "all" if n_png >= 10000 else "vqa_train"
+    if name == "decision":
+        cfg["paths"]["detector_checkpoint"] = os.path.join(OUT, "detector", "detector.pt")
+        cfg["paths"]["kd_r_cache"] = os.path.join(CACHE, "kd_r")
+        cfg["train"]["batch_size"] = 16 if vram >= 14 else 8
+    if name == "teacher":
+        cfg["model"]["name"] = MEDGEMMA or cfg["model"]["name"]
+        cfg["model"]["adapter"] = ADAPTER
+        cfg["kd_r"]["subset_fraction"] = KD_R_SUBSET
+    if name == "generator":
+        cfg["generator_s"]["model"] = GEN_S_MODEL or cfg["generator_s"]["model"]
+        cfg["generator_l"]["model"] = MEDGEMMA or cfg["generator_l"]["model"]
+    CFG[name] = os.path.join(WORK, "configs", f"kaggle_{name}.yaml")
+    dump_config(cfg, CFG[name])
+print(CFG)
+assert os.path.isfile(os.path.join(common["processed_dir"], "train.jsonl"))
+
+def sh(*args, check=True):
+    cmd = [sys.executable, "-m", *[str(a) for a in args]]
+    print("$", " ".join(cmd), flush=True)
+    t0 = time.time()
+    r = subprocess.run(cmd)
+    print(f"  -> exit {r.returncode} in {(time.time() - t0) / 60:.1f} min", flush=True)
+    if check and r.returncode != 0:
+        raise SystemExit(f"step failed: {' '.join(cmd)}")
+    return r.returncode
+'''
+
+FULL_STAGE0 = r'''
+DET = os.path.join(OUT, "detector", "detector.pt")
+if os.path.isfile(DET) and not RETRAIN_DETECTOR:
+    print("detector.pt present -> stage 0 training skipped")
+else:
+    sh("evidencekd.preflight", "--config", CFG["detector"])
+    sh("evidencekd.models.detector", "train", "--config", CFG["detector"], "--output-dir", os.path.join(OUT, "detector"),
+       "--resume", "auto", *(["--epochs", str(DETECTOR_EPOCHS)] if DETECTOR_EPOCHS else []),
+       *(["--limit", str(SMOKE)] if SMOKE else []))
+for split in ("val", "test"):
+    p = os.path.join(OUT, f"detections_{split}.json")
+    if not os.path.isfile(p) or RETRAIN_DETECTOR:
+        sh("evidencekd.models.detector", "predict", "--config", CFG["detector"], "--checkpoint", DET, "--split", split, "--out", p)
+    sh("evidencekd.eval.stage0", "--config", CFG["detector"], "--detections", p, "--split", split, "--out-dir", REPORTS)
+'''
+
+FULL_DERIVED = r'''
+try:
+    import torchxrayvision  # noqa: F401
+    anat_flag = []
+except Exception:
+    anat_flag = ["--no-anatomy"]
+    print("torchxrayvision not available -> fallback anatomy (no zone/extent facts)")
+sh("evidencekd.data.build_regions", "--config", CFG["decision"], *anat_flag)
+# self-test of the whole inference chain with the answer key: must be ~perfect
+sh("evidencekd.inference.oracle_decisions", "--config", CFG["decision"], "--split", "val")
+sh("evidencekd.inference.pipeline", "--config", CFG["decision"], "--split", "val", "--generator", "template",
+   "--decision", os.path.join(OUT, "decision_val_oracle.jsonl"), "--regions", os.path.join(DERIVED, "regions_val_annotation.json"), "--tag", "oracle")
+sh("evidencekd.eval.vindr_tables", "--config", CFG["decision"], "--pred", os.path.join(REPORTS, "preds_val_oracle.jsonl"), "--split", "val")
+'''
+
+FULL_STAGE1 = r'''
+DEC_DIR = os.path.join(OUT, "decision")
+S1 = os.path.join(DEC_DIR, "decision_stage1.pt")
+if not os.path.isfile(S1) or RETRAIN_DECISION:
+    sh("evidencekd.models.decision_branch", "train", "--config", CFG["decision"], "--stage", "1", "--output-dir", DEC_DIR,
+       "--resume", "auto", *(["--epochs", str(DECISION_EPOCHS)] if DECISION_EPOCHS else []), *(["--limit", str(SMOKE)] if SMOKE else []))
+for split in ("val", "test"):
+    sh("evidencekd.models.decision_branch", "predict", "--config", CFG["decision"], "--checkpoint", S1, "--split", split,
+       "--out", os.path.join(OUT, f"decision_{split}.jsonl"))
+sh("evidencekd.inference.pipeline", "--config", CFG["decision"], "--tune")
+'''
+
+FULL_TEACHER = r'''
+HAVE_TEACHER = bool(MEDGEMMA and ADAPTER) and RUN_TEACHER
+if not HAVE_TEACHER:
+    print("teacher skipped (needs MedGemma + the VinDr adapter attached, and RUN_TEACHER=True)")
+else:
+    t_start = time.time()
+    def budget_left():
+        return (time.time() - t_start) / 60 < TEACHER_BUDGET_MIN
+    for shard in range(KD_SHARDS):
+        if not budget_left():
+            print("KD-R: time budget reached; resume next session"); break
+        sh("evidencekd.teacher.kd_r_targets", "--config", CFG["teacher"], "--shard", shard, "--n-shards", KD_SHARDS,
+           *(["--limit", str(SMOKE)] if SMOKE else []), check=False)
+    sh("evidencekd.teacher.kd_r_targets", "--config", CFG["teacher"], "--gate", check=False)
+    sh("evidencekd.teacher.kd_r_targets", "--config", CFG["teacher"], "--sensitivity", check=False)
+    for shard in range(KD_SHARDS):
+        if not budget_left():
+            print("KD-C: time budget reached; resume next session"); break
+        sh("evidencekd.teacher.kd_c_targets", "--config", CFG["teacher"], "--shard", shard, "--n-shards", KD_SHARDS,
+           *(["--limit", str(SMOKE)] if SMOKE else []), check=False)
+'''
+
+FULL_STAGE2 = r'''
+FINAL_DEC = S1
+if glob.glob(os.path.join(CACHE, "kd_r", "*.jsonl")):
+    S2 = os.path.join(DEC_DIR, "decision_stage2.pt")
+    if not os.path.isfile(S2) or RETRAIN_DECISION:
+        sh("evidencekd.models.decision_branch", "train", "--config", CFG["decision"], "--stage", "2", "--output-dir", DEC_DIR,
+           "--init", S1, "--resume", "auto", *(["--limit", str(SMOKE)] if SMOKE else []))
+    for split in ("val", "test"):
+        sh("evidencekd.models.decision_branch", "predict", "--config", CFG["decision"], "--checkpoint", S2, "--split", split,
+           "--out", os.path.join(OUT, f"decision_{split}.jsonl"))
+    sh("evidencekd.inference.pipeline", "--config", CFG["decision"], "--tune")
+    FINAL_DEC = S2
+else:
+    print("no KD-R cache -> stage 2 skipped; the stage-1 decision branch is evaluated")
+print("decision checkpoint for evaluation:", FINAL_DEC)
+'''
+
+FULL_STAGE3 = r'''
+VERIFIER = ""
+GEN_S = ""
+if glob.glob(os.path.join(CACHE, "kd_c", "*.jsonl")):
+    sh("evidencekd.models.verifier", "train", "--config", CFG["generator"], "--output-dir", os.path.join(OUT, "verifier"), check=False)
+    if os.path.isfile(os.path.join(OUT, "verifier", "verifier.pt")):
+        VERIFIER = os.path.join(OUT, "verifier", "verifier.pt")
+if GEN_S_MODEL:
+    rc = sh("evidencekd.models.generator_s", "train", "--config", CFG["generator"], "--output-dir", os.path.join(OUT, "generator_s"),
+            *(["--limit", str(SMOKE)] if SMOKE else []), check=False)
+    if rc == 0 and os.path.isdir(os.path.join(OUT, "generator_s", "final")):
+        GEN_S = os.path.join(OUT, "generator_s", "final")
+print("verifier:", VERIFIER or "rules only", "| generator S:", GEN_S or "not trained (template generator)")
+'''
+
+FULL_EVAL = r'''
+preds = {}
+for split in ("val", "test"):
+    gens = [("template", [])] + ([("s", ["--generator-dir", GEN_S])] if GEN_S else [])
+    for gen, extra in gens:
+        sh("evidencekd.inference.pipeline", "--config", CFG["decision"], "--split", split, "--generator", gen, *extra,
+           *(["--verifier", VERIFIER] if VERIFIER else []))
+        sh("evidencekd.eval.tables_spec", "--config", CFG["decision"], "--pipeline", os.path.join(OUT, f"pipeline_{split}_{gen}.jsonl"), "--split", split)
+        preds.setdefault(split, []).append(os.path.join(REPORTS, f"preds_{split}_{gen}.jsonl"))
+    b7 = os.path.join(REPORTS, f"preds_{split}_b7.jsonl")
+    if os.path.isfile(b7):
+        preds[split].append(b7)
+    sh("evidencekd.eval.vindr_tables", "--config", CFG["decision"], "--pred", *preds[split], "--split", split, check=False)
+sh("evidencekd.eval.faithfulness", "--config", CFG["decision"], "--checkpoint", FINAL_DEC,
+   "--pipeline", os.path.join(OUT, "pipeline_test_template.jsonl"), "--split", "test", "--limit", "300", check=False)
+'''
+
+FULL_SAVE = r'''
+stage = "/kaggle/working/evidencekd_full"
+shutil.rmtree(stage, ignore_errors=True)
+for sub in ("reports", "derived", "cache"):
+    if os.path.isdir(f"/kaggle/working/{sub}"):
+        shutil.copytree(f"/kaggle/working/{sub}", os.path.join(stage, sub))
+os.makedirs(os.path.join(stage, "outputs"), exist_ok=True)
+keep = ["detector/detector.pt", "decision/decision_stage1.pt", "decision/decision_stage2.pt", "decision/vocab.json",
+        "verifier/verifier.pt", "generator_s/final", "detections_val.json", "detections_test.json",
+        "decision_val.jsonl", "decision_test.jsonl"] + [os.path.basename(p) for p in glob.glob(os.path.join(OUT, "pipeline_*.jsonl"))]
+for k in keep:
+    p = os.path.join(OUT, k)
+    if os.path.isdir(p):
+        shutil.copytree(p, os.path.join(stage, "outputs", k), dirs_exist_ok=True)
+    elif os.path.isfile(p):
+        os.makedirs(os.path.dirname(os.path.join(stage, "outputs", k)), exist_ok=True); shutil.copy2(p, os.path.join(stage, "outputs", k))
+zip_path = shutil.make_archive("/kaggle/working/evidencekd-full", "zip", "/kaggle/working", "evidencekd_full")
+print(f"{os.path.getsize(zip_path) / 2**20:.0f} MB ->", zip_path)
+print("Phiên sau: Add Input file này để resume mọi giai đoạn (checkpoint, cache KD, report).")
+for p in sorted(glob.glob(os.path.join(REPORTS, "*.json"))):
+    print(" ", os.path.basename(p))
+'''

@@ -160,11 +160,27 @@ class TestProcessedData:
         for split in ("train", "val", "test"):
             assert len(load_samples(PROCESSED, split)) == summary["qa_per_split"][split]
 
-    def test_splits_are_disjoint_by_image(self):
-        images = load_images(PROCESSED)
-        s = splits_from_images(images)
-        assert s.sizes == {"train": 3735, "val": 359, "test": 300}
-        assert not (set(s.val) & set(s.test))
+    def test_splits_match_vindr_table3(self):
+        s = splits_from_images(load_images(PROCESSED))
+        assert s.sizes == {"train": 3735, "val": 659, "test": 300, "tune": 359}
+        assert set(s.test) <= set(s.val)
+        assert not (set(s.train) & set(s.val))
+        assert s.held_out == frozenset(s.val)
+
+    def test_split_identical_to_sibling_repo(self):
+        sib = os.path.join(REPO, "..", "VinDR-CXR-VQA", "data", "processed")
+        if not os.path.isfile(os.path.join(sib, "images.json")):
+            pytest.skip("sibling build not present")
+        ours = splits_from_images(load_images(PROCESSED))
+        theirs = splits_from_images(load_images(sib))
+        assert ours.as_dict() == theirs.as_dict()
+
+    def test_held_out_assertion(self):
+        from evidencekd.data.splits import LeakageError
+        s = splits_from_images(load_images(PROCESSED))
+        s.assert_held_out(s.train[:10], stage="x")
+        with pytest.raises(LeakageError):
+            s.assert_held_out([s.test[0]], stage="x")
 
     def test_every_sample_has_supervision_box_of_its_finding(self):
         for s in load_samples(PROCESSED, "val"):

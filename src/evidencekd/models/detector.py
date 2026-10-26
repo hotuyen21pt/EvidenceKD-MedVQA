@@ -101,7 +101,7 @@ def train(cfg, *, output_dir: str, epochs: int | None, resume: str | None,
         samples = samples[:limit]
     summary = summarize(samples)
     print(f"[train] {summary['n_images']} images, {summary['n_with_boxes']} with boxes, "
-          f"{summary['n_boxes']} boxes; held out {len(splits.val)} val + {len(splits.test)} test")
+          f"{summary['n_boxes']} boxes; held out {len(splits.val)} val images (test is a subset)")
     with open(os.path.join(output_dir, "train_index_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 

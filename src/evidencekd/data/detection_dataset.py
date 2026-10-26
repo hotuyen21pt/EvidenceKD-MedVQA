@@ -15,7 +15,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from evidencekd.data.splits import Splits, assert_images_held_out
+from evidencekd.data.vindr_processed import ProcessedSplits
 from evidencekd.labels import VQA_CLASSES, VQA_CLASS_TO_ID
 
 
@@ -57,7 +57,7 @@ def _load_vindr(dataset_dir: str, partition: str = "train"):
 def build_index(
     dataset_dir: str,
     *,
-    splits: Splits | None,
+    splits: ProcessedSplits | None,
     image_source: str = "all",
     fuse_iou: float = 0.3,
     min_votes: int = 1,
@@ -90,9 +90,9 @@ def build_index(
     if splits is not None and image_ids is None:
         # Drop the VQA val/test images from whatever source was chosen, then
         # assert it — the assertion documents the guarantee, the filter makes it.
-        held = set(splits.val) | set(splits.test)
+        held = splits.held_out  # all of val (test is a subset of it)
         chosen = [m for m in chosen if m.image_id not in held]
-        assert_images_held_out((m.image_id for m in chosen), splits, stage=stage)
+        splits.assert_held_out((m.image_id for m in chosen), stage=stage)
 
     boxed, normal = [], []
     for m in chosen:

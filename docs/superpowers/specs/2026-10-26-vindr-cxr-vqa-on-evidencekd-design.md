@@ -105,20 +105,18 @@ Mục đích ứng dụng không đổi: một bác sĩ/kỹ sư chọn ảnh, h
 
 Tọa độ nội bộ của EvidenceKD = **pixel DICOM gốc** (giống `LocBox` và `Box`). Chỉ hai chỗ đổi hệ: (a) detector làm việc ở không gian 224 px rồi `Box.scale(1/fx, 1/fy)` về gốc; (b) cầu nối sang VinDr phát `<loc>` ở `norm1000` bằng `boxes.to_normalized` [VinDr].
 
-### 5.2 Chia tập [Tôi chốt]
+### 5.2 Chia tập [Anh chốt: y hệt VinDR-CXR-VQA]
 
-Dùng **chính split của VinDr** (seed 42, stratify theo lớp hiếm nhất, 3.735 ảnh train) nhưng dựng với `--disjoint-test`:
+Dùng **chính split của VinDr, cấu hình mặc định** (seed 42, stratify theo lớp hiếm nhất, `disjoint_test: false`), file `data/processed` giống từng byte với repo VinDr:
 
 | Tập | Ảnh | QA | Dùng để |
 |---|---|---|---|
 | train | 3.735 | 14.960 | mọi huấn luyện, sinh mục tiêu KD |
-| val | 359 | ≈1.430 | chọn ngưỡng, early stop, hiệu chỉnh nhiệt độ teacher |
-| test | 300 | 1.207 | báo cáo chính |
-| val∪test = "val-659" | 659 | 2.637 | **chỉ** Bảng 4–6 để so với paper (paper chấm trên 659 ảnh này) |
+| val | 659 | 2.637 | Bảng 4–6 đúng như paper chấm; early stop |
+| test ⊂ val | 300 | 1.207 | báo cáo held-out, như VinDr |
+| "tune" = val ∖ test | 359 | ≈1.430 | **chọn ngưỡng, hiệu chỉnh nhiệt độ teacher** — để vẫn thỏa spec §8 "ngưỡng chốt trước khi mở test" mà không đổi file |
 
-Lý do: train giống hệt bản tái lập paper nên dòng B4 so sánh được; nhưng spec §5/§8 đòi ngưỡng chốt trước khi mở test, điều đó không thể nếu test ⊂ val. Mọi số "val-659" ghi rõ là *paper-comparable, không dùng để chọn gì*.
-
-Thay đổi so với `configs/data.yaml` hiện tại (seed 1337, 10/10): ghi vào bảng "Decisions that must not be reverted" với lý do trên. `splits.split_manifest` băm cả ba tập và ghi `reports/split_manifest.json`. `assert_images_held_out` gọi ở đầu giai đoạn 0 (detector), lúc nạp teacher, và lúc sinh KD-R/KD-C.
+`vindr_processed.ProcessedSplits` đọc split từ `images.json` (`split`, `in_val`); `held_out` = toàn bộ val (chứa test) — không ảnh nào trong đó vào tiền huấn luyện detector, teacher hay sinh KD. Manifest hash ghi `reports/split_manifest.json`. Số liệu được chọn ngưỡng trên "tune" rồi báo trên val-659 (so paper) và test-300.
 
 ### 5.3 Gộp hộp [Tôi chốt]
 
@@ -411,7 +409,7 @@ Bước 1–4 làm được ngay trên máy local, không cần GPU, không ch�
 ## 12. Những gì tôi tự chốt (anh kiểm tra khi đọc)
 
 1. Faster R-CNN R50-FPN thay Deformable-DETR; điều kiện hóa câu hỏi dời về head relevance sau fusion.
-2. Split = VinDr seed 42 + `--disjoint-test`; "val-659" chỉ để so paper.
+2. Split = VinDr mặc định (test ⊂ val), theo yêu cầu của anh; ngưỡng chọn trên val ∖ test.
 3. Hộp vùng = `boxes_fused` IoU 0,3 của VinDr; `data.yaml` đổi 0,4 → 0,3.
 4. Hộp giám sát = `gt_location_fixed`; hộp công bố chỉ để tái lập và minh bạch.
 5. `a*` cho KD-R = câu trả lời công bố đã bỏ `<loc>`; mean logprob teacher-forced; `c_n` = temperature-scaled trên val-359.

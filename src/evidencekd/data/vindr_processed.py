@@ -20,8 +20,10 @@ import os
 from dataclasses import dataclass
 from typing import Iterator, Sequence
 
+import hashlib
+
 from evidencekd.data.boxes import Box, FusedBox
-from evidencekd.data.splits import Splits, assert_no_leakage
+from evidencekd.data.splits import LeakageError
 from evidencekd.labels import VQA_CLASSES, finding_in_text
 
 SPLIT_FILES = ("train", "val", "test")
@@ -82,7 +84,8 @@ class ImageRecord:
 
     image_id: str
     image_path: str
-    split: str
+    split: str               # "train" | "val" | "test" (test images are also in_val)
+    in_val: bool
     width: int
     height: int
     resized_width: int
@@ -177,6 +180,7 @@ def _image_from_dict(d: dict) -> ImageRecord:
         image_id=d["image_id"],
         image_path=d["image_path"],
         split=d["split"],
+        in_val=bool(d.get("in_val", d["split"] != "train")),
         width=int(d["width"]), height=int(d["height"]),
         resized_width=int(d["resized_width"]),
         resized_height=int(d["resized_height"]),
@@ -201,22 +205,83 @@ def load_images(processed_dir: str) -> dict[str, ImageRecord]:
     return out
 
 
-def splits_from_images(images: dict[str, ImageRecord]) -> Splits:
-    """The image-level split recorded in ``images.json``.
+@dataclass(frozen=True)
+class ProcessedSplits:
+    """The image-level split exactly as VinDr-CXR-VQA defines it.
 
-    Raises ``LeakageError`` if an image is listed in two splits — which cannot
-    happen for a file written by ``build_dataset --disjoint-test``, and is
-    exactly the thing to catch when someone builds without the flag.
+    Table 3 of the paper: 3,735 train / 659 validation images, and a 300-image
+    **test subset of validation** (3,735 + 659 is the whole release, so test
+    cannot be a third partition). ``held_out`` is therefore ``val`` — every
+    image that must never enter detector pre-training, teacher tuning or KD
+    target generation. ``tune`` is ``val`` minus ``test``: the 359 images on
+    which thresholds are chosen before test is opened (spec §8).
     """
-    buckets: dict[str, list[str]] = {"train": [], "val": [], "test": []}
+
+    train: tuple[str, ...]
+    val: tuple[str, ...]
+    test: tuple[str, ...]
+
+    def of(self, name: str) -> tuple[str, ...]:
+        if name == "tune":
+            return self.tune
+        if name not in ("train", "val", "test"):
+            raise KeyError(name)
+        return getattr(self, name)
+
+    @property
+    def held_out(self) -> frozenset[str]:
+        return frozenset(self.val)
+
+    @property
+    def tune(self) -> tuple[str, ...]:
+        t = set(self.test)
+        return tuple(i for i in self.val if i not in t)
+
+    @property
+    def sizes(self) -> dict[str, int]:
+        return {"train": len(self.train), "val": len(self.val), "test": len(self.test),
+                "tune": len(self.tune)}
+
+    def as_dict(self) -> dict[str, list[str]]:
+        return {"train": list(self.train), "val": list(self.val), "test": list(self.test)}
+
+    def manifest(self) -> dict[str, object]:
+        blob = json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return {"sizes": self.sizes, "sha256": hashlib.sha256(blob).hexdigest(),
+                "test_subset_of_val": True}
+
+    def assert_held_out(self, used_image_ids, *, stage: str) -> None:
+        bad = sorted(set(used_image_ids) & self.held_out)
+        if bad:
+            raise LeakageError(
+                f"{stage}: {len(bad)} held-out (val/test) image(s) would be used, "
+                f"e.g. {bad[:5]}")
+
+
+def splits_from_images(images: dict[str, ImageRecord]) -> ProcessedSplits:
+    """Read the split VinDr's ``build_dataset`` recorded in ``images.json``.
+
+    train = ``split == "train"``; val = ``in_val`` (659); test = ``split ==
+    "test"`` (300, a subset of val). Raises ``LeakageError`` if train and val
+    overlap or if a test image is not in val — neither can happen for a file
+    written by ``vindr_cxr_vqa.build_dataset`` with its default settings.
+    """
+    train, val, test = [], [], []
     for rec in images.values():
-        if rec.split not in buckets:
-            raise ProcessedDataError(f"unknown split {rec.split!r} on {rec.image_id}")
-        buckets[rec.split].append(rec.image_id)
-    s = Splits(train=tuple(sorted(buckets["train"])),
-               val=tuple(sorted(buckets["val"])),
-               test=tuple(sorted(buckets["test"])))
-    assert_no_leakage(s)
+        if rec.split == "train" and not rec.in_val:
+            train.append(rec.image_id)
+        elif rec.in_val:
+            val.append(rec.image_id)
+            if rec.split == "test":
+                test.append(rec.image_id)
+        else:
+            raise ProcessedDataError(f"unclassifiable record {rec.image_id}: "
+                                     f"split={rec.split!r} in_val={rec.in_val}")
+    s = ProcessedSplits(tuple(sorted(train)), tuple(sorted(val)), tuple(sorted(test)))
+    if set(s.train) & set(s.val):
+        raise LeakageError("train and val share images")
+    if not set(s.test) <= set(s.val):
+        raise LeakageError("test is not a subset of val — was the data built with --disjoint-test?")
     return s
 
 

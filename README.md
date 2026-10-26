@@ -23,7 +23,7 @@ its Tables 4–6, one-image UI) and realises it with the EvidenceKD flow.
 | | |
 |---|---|
 | Research logic (schema, fusion, KD-R math, claim grammar, Answer Lock, splits) | **Implemented, tested** |
-| Data on disk | **Yes** — `data/processed/` built from `../VinDR-CXR-VQA` with `--disjoint-test` (3,735 / 359 / 300 images) |
+| Data on disk | **Yes** — `data/processed/` built from `../VinDR-CXR-VQA`, same split as that repo (3,735 train / 659 val / 300 test ⊂ val) |
 | Bridge to VinDr's Tables 4–6 scorer | **Implemented, tested** (oracle replay scores P=1.0, 100 % IoU≥0.5 through `vindr_cxr_vqa.evaluate`) |
 | Stage 0: Faster R-CNN detector, train/predict/eval, Kaggle notebooks + bundles | **Implemented, not yet run** (no GPU here) |
 | Stages 1–3 (decision branch, teacher/KD, generator, verifier) | **Not written** |
@@ -153,7 +153,7 @@ Each of these is a correction someone is likely to "fix" back.
 | **`LockedAnswer` is a guarded class, not `frozen=True`** | `frozen=True` raises a bare `FrozenInstanceError` that says nothing about why. The custom `__setattr__` names the rule being enforced. |
 | **A generator disagreeing with the locked answer produces a *warning*, never a correction** | Spec §2: the decision branch owns the answer. Abstention, if wanted, is a separate branch with its own threshold — not the generator quietly concluding something else. |
 | **Splitting is by image, never by question** | Each image carries 3–5 questions. A question-level split puts questions about the same radiograph in train and test. |
-| **The split is VinDr's (seed 42, 85/15, stratified by rarest class) with `--disjoint-test`, not the 10/10 seed-1337 default of `data/splits.py`** | Train is then identical to the paper reproduction, so the B4 row is comparable; test is carved out of val so thresholds can be chosen on val before test is opened (spec §8). The paper's 659-image "val" is val∪test and is reported only as paper-comparable. Manifest hash in `reports/split_manifest.json`. |
+| **The split is VinDr-CXR-VQA's, byte-identical: 3,735 train / 659 val, test = a 300-image subset of val** — not the 10/10 seed-1337 default of `data/splits.py` | Tables 4–6 are then scored on exactly the images the paper scored. Because test ⊂ val, `ProcessedSplits.held_out` is all of val, and thresholds are chosen on `tune` = val ∖ test (359 images) so test is still never used to pick anything (spec §8). Manifest hash in `reports/split_manifest.json`. |
 | **Region boxes are VinDr's `boxes_fused` at IoU 0.3, not `data/boxes.fuse_boxes` at 0.4** | `gt_location_fixed` — the supervision box — was chosen from exactly that fused set; re-fusing at another threshold would make the target box and the candidate regions disagree. `n_raters = votes` is kept. |
 | **The detector never flips images horizontally** | Image-left is the patient's right; a flip silently mirrors every laterality fact. |
 | **No box is fabricated when the detector is silent** | `vindr_bridge.compose` emits no `<loc>` for a question with no box above threshold. VinDr's scorer reports `with_loc_pct`; a fabricated centred box would hide a localisation failure as a bad one. |

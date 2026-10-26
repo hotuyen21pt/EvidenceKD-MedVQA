@@ -64,7 +64,8 @@ MD_TRAIN = """
 MD_EVAL = """
 ## 4. Dự đoán và chấm
 
-Detector chạy trên val (359 ảnh) và test (300 ảnh). `evidencekd.eval.stage0`
+Detector chạy trên val (659 ảnh, đúng tập paper chấm) và test (300 ảnh, tập con
+của val như Bảng 3 của paper — y hệt VinDR-CXR-VQA). `evidencekd.eval.stage0`
 tính mAP, Grounding@IoU≥0,5 (Bảng B của spec), rồi dịch hộp thành chuỗi
 `"{finding} <loc_...>."` và gọi `vindr_cxr_vqa.evaluate` — Bảng 4–6 y hệt paper.
 """

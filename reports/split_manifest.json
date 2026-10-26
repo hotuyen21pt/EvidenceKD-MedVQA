@@ -1,9 +1,11 @@
 {
   "sizes": {
     "train": 3735,
-    "val": 359,
-    "test": 300
+    "val": 659,
+    "test": 300,
+    "tune": 359
   },
-  "sha256": "13b6132b2c6e389c3176860c3d0cd1184477db53e2c7b572f9e7b0e93a440700",
-  "source": "vindr_cxr_vqa.build_dataset --disjoint-test (seed 42, val_ratio 0.15, test_size 300)"
+  "sha256": "571df84788ae13e99250718b12af5eeaa78580ee9d24c7dfbf400da5914ed8d7",
+  "test_subset_of_val": true,
+  "source": "vindr_cxr_vqa.build_dataset, default config (seed 42, val_ratio 0.15, test_size 300, disjoint_test false)"
 }

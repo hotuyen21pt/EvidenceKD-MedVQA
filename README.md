@@ -39,6 +39,188 @@ see [Why the core is torch-free](#why-the-core-is-torch-free).
 
 ---
 
+## Luồng xử lý chi tiết của repo (tiếng Việt)
+
+Mục này lần theo **một câu hỏi** của bản phát hành — ví dụ
+`"Where is the Pleural effusion?"` trên ảnh `9a5094b2…` — qua mọi giai đoạn,
+ghi rõ module nào làm gì, đọc file nào, ghi file nào, và lệnh chạy tương ứng.
+Thứ tự dưới đây đúng là thứ tự các cell trong `notebooks/kaggle_full_pipeline.ipynb`.
+
+```
+VinDR-CXR-VQA (repo bên cạnh)                 EvidenceKD-MedVQA (repo này)
+┌─────────────────────────────┐
+│ data/processed/*.jsonl      │──(1) đọc────▶ data/vindr_processed      ──▶ VQASample, ImageRecord, ProcessedSplits
+│ images.json (boxes_raw/fused)│
+│ dataset/*.png 224px + CSV   │──(2) train──▶ models/detector (GĐ 0)     ──▶ outputs/detector/detector.pt, detections_{val,test}.json
+│ vindr_cxr_vqa.evaluate      │◀─(9) chấm───  eval/vindr_bridge           ◀── chuỗi "{answer} <loc_…>. Reasoning: …"
+│ outputs/medgemma-lora       │──(6) teacher▶ teacher/medgemma            ──▶ cache/kd_r, cache/kd_c
+└─────────────────────────────┘
+        (3) data/build_regions ──▶ derived/regions_*.json, anatomy.json, negatives.jsonl, labels_train.jsonl, background.json
+        (4) inference/oracle_decisions + pipeline --generator template ──▶ self-test: P = 1.0, IoU≥.5 ≈ 100 %
+        (5) models/decision_branch --stage 1 ──▶ outputs/decision/decision_stage1.pt, decision_{val,test}.jsonl, reports/thresholds.json
+        (6) teacher/kd_r_targets, teacher/kd_c_targets ──▶ cache/kd_r/*.jsonl, cache/kd_c/*.jsonl
+        (7) models/decision_branch --stage 2 ──▶ decision_stage2.pt
+        (8) models/verifier, models/generator_s (hoặc generator_l) ──▶ outputs/verifier/verifier.pt, outputs/generator_s/final
+        (9) inference/pipeline ──▶ outputs/pipeline_{split}_{gen}.jsonl + reports/preds_*.jsonl ──▶ eval/tables_spec, eval/vindr_tables, eval/faithfulness
+       (10) serve + ui ──▶ hỏi từng ảnh, xem hộp, dữ kiện, mệnh đề và vùng được trích
+```
+
+### (1) Dữ liệu vào — `data/vindr_processed.py`
+
+Không dựng lại gì. `scripts/build_data.py` gọi `vindr_cxr_vqa.build_dataset`
+với cấu hình mặc định nên `data/processed/` giống **từng byte** với repo VinDR
+(kiểm bằng sha256 trong test): 17.597 QA / 4.394 ảnh; train 3.735 ảnh, val 659,
+test 300 ⊂ val. Mỗi `VQASample` mang câu hỏi, câu trả lời công bố, `reason`,
+loại câu hỏi, `gt_finding`, và **hai hộp**: `bbox_orig` (công bố, 60 % sai lớp) và
+`bbox_fixed_orig` (đã nối lại đúng lớp — hộp giám sát duy nhất ở đây). Mỗi
+`ImageRecord` mang `boxes_raw` (từng bác sĩ) và `boxes_fused` (đồng thuận IoU 0,3,
+có `votes`). `ProcessedSplits.held_out` = toàn bộ val; `tune` = val ∖ test (359 ảnh)
+là nơi chọn mọi ngưỡng. Tọa độ nội bộ luôn là **pixel DICOM gốc**.
+
+### (2) Giai đoạn 0 — detector, `models/detector.py`
+
+`data/detection_dataset.build_index` đọc CSV VinDr qua `vindr_cxr_vqa.vindr`,
+gộp ba lần đọc của bác sĩ ở IoU 0,3 (đúng tham số VinDR dùng để sửa hộp), giữ
+14 lớp VQA, đổi hộp về không gian 224 px, **loại mọi ảnh val/test** rồi assert.
+Faster R-CNN R50-FPN (torchvision, khởi tạo COCO từ `weights/`) upsample 224→512
+bên trong model. Checkpoint mỗi epoch, `--resume auto`. `predict` ghi
+`detections_{split}.json` với hộp đã quy về pixel gốc. `eval/stage0` chấm mAP,
+Grounding@0,5 và — qua cầu nối — dòng **B7** trên Bảng 4–6 của VinDR.
+
+### (3) Dữ liệu dẫn xuất — `data/build_regions.py`
+
+Ghi vào `derived/`:
+
+| File | Từ đâu | Dùng ở đâu |
+|---|---|---|
+| `anatomy.json` | torchxrayvision PSPNet (phổi/tim) hoặc fallback thorax = cả ảnh | bảng dữ kiện (bên, tầng, mức lan rộng) |
+| `regions_train.json` | `boxes_fused` ≤ 8 vùng `R01..` theo `votes` rồi diện tích + 4 vùng giải phẫu `A_*` | huấn luyện GĐ 1–2, teacher KD-R che vùng, KD-C |
+| `regions_{val,test}.json` | detector (`detections_*.json`, NMS theo lớp, ngưỡng điểm) | suy luận thật |
+| `regions_{val,test}_annotation.json` | annotation | oracle, phân tích |
+| `labels_train.jsonl` | `data/qa_labels`: loại câu hỏi, Yes/No, finding đa nhãn (lớp có hộp trên ảnh), bên/đếm **tính hình học** từ hộp của `gt_finding`, `target_regions` = vùng IoU ≥ 0,5 với `bbox_fixed_orig` | mọi head của decision branch, pointer, cổng KD-R |
+| `negatives.jsonl` | `data/negatives`: câu hỏi mẫu "Is there X?" trả lời "No" trên ảnh train không có X và ảnh "No finding" của VinDr | head Yes/No, fact `absence` (chỉ train, chỉ QA+Full) |
+| `background.json` | câu `reason` distinct theo finding | mệnh đề `background` đã duyệt |
+
+`RegionSet` là **hợp đồng dữ liệu chung**: mã vùng được chốt ở đây một lần;
+pointer chọn, mệnh đề trích, KD-R che — đều theo cùng mã.
+
+### (4) Self-test oracle — `inference/oracle_decisions.py`
+
+Giả lập đầu ra decision branch từ annotation (xác suất finding 1/0, relevance và
+pointer đặt lên vùng đúng), chạy pipeline với generator mẫu câu, chấm bằng
+`vindr_cxr_vqa.evaluate`. Phải cho precision 1,0 và ≈ 100 % ảnh IoU ≥ 0,5; nếu
+không, cầu nối hỏng chứ không phải model. Đã chạy thật trên máy local: P = 1,0,
+99,85 % IoU ≥ 0,5, Grounding@0,5 = 0,967.
+
+### (5) Giai đoạn 1 — decision branch, `models/decision_branch.py`
+
+Một câu hỏi vào model dưới dạng: ảnh 224 px, danh sách hộp vùng (finding + giải
+phẫu) ở 224 px, mã lớp/loại vùng, token câu hỏi.
+
+1. **Backbone đóng băng** của detector GĐ 0 → FPN; `MultiScaleRoIAlign` 7×7 trên hộp
+   gốc **và** hộp mở rộng ×1,5 → ghép → token vùng d=256, cộng embedding loại
+   (finding/giải phẫu/ảnh), lớp, tọa độ chuẩn hóa; thêm **token toàn ảnh**.
+2. **Text encoder**: `simple` (từ vựng dựng từ câu hỏi train + 2 lớp Transformer,
+   không cần tải gì) hoặc `hf` (CXR-BERT attach offline).
+3. **Fusion** 2 lớp cross-attention hai chiều vùng ↔ token câu hỏi.
+4. **Evidence encoder** 2 lớp Transformer trên [vùng; câu hỏi].
+5. **Heads**: relevance ρ̂_j (vùng nào trả lời câu hỏi), loại câu hỏi, finding đa
+   nhãn (từ token toàn ảnh), Yes/No, bên, đếm (từ [câu hỏi; vùng gộp theo ρ̂]),
+   **pointer** π_c trên vùng finding + slot `NO_SUPPORT`.
+6. **Loss GĐ 1**: BCE relevance + InfoNCE alignment + CE/BCE các head +
+   −log Σ_{G} π (mẫu âm → slot null).
+
+`predict` ghi `decision_{split}.jsonl` (xác suất từng head, relevance, pointer
+theo mã vùng của `regions_{split}.json`). `pipeline --tune` chọn ngưỡng finding
+trên `tune` theo F1 tập finding mỗi ảnh → `reports/thresholds.json`.
+
+### (6) Teacher MedGemma — `teacher/`
+
+`teacher/medgemma.py` nạp MedGemma-1.5-4B-it + **adapter LoRA của VinDR** qua
+chính `vindr_cxr_vqa.infer` (cùng prompt, cùng chat template adapter được train).
+
+* **KD-R** (`kd_r_targets.py`): với mỗi câu train, `a*` = câu trả lời công bố bỏ
+  `<loc>`; tính `log p_T(a*|I,Q)` teacher-forced trên ảnh gốc và trên ảnh **che
+  từng vùng** `R01..R08` (tô đen trên PNG 224 px); `r_i = max(0, sụt)`;
+  `π^T = softmax([r, r_∅]/τ)`; sinh câu trả lời tự do để biết teacher đúng
+  (`evaluate.mentioned` của VinDR). Ghi `cache/kd_r/shard-XXXX.jsonl`, resume theo
+  shard. `--gate` tính trọng số `w_n = 1[đúng]·1[m_n ≥ δ]·c_n` (các cờ `--no-*`,
+  `--random-gate` = các dòng Bảng E); `--sensitivity` là điều kiện vào của spec §8.
+* **KD-C** (`kd_c_targets.py`): teacher nhận câu hỏi + đáp án mẫu + **bảng dữ kiện
+  tính từ annotation**, sinh 3 rationale; `teacher/prompts.claims_from_text`
+  parse ngữ pháp `<obs facts=F1> … [R01] </obs>` hoặc gán câu tự do vào fact khớp;
+  `kd/kd_c.build_targets` + verifier luật giữ từng mệnh đề đạt →
+  `cache/kd_c/shard-XXXX.jsonl`.
+
+### (7) Giai đoạn 2 — KD-R và faithfulness
+
+`decision_branch --stage 2 --init decision_stage1.pt` thêm `kd/kd_r.kd_r_loss`
+(KL(π^T‖π^S) có trọng số cổng, cùng tập mã vùng vì train dùng `regions_train.json`)
+và số hạng faithfulness: che **token** từng vùng trong evidence encoder, đo sụt
+logit của finding được hỏi → π^cf → KL(π^cf‖π^S).
+
+### (8) Giai đoạn 3 — verifier và generator
+
+* `models/verifier_rules.py` (v1, luật): mệnh đề `supported` khi ngữ pháp sạch và
+  mọi thuộc tính nêu trong câu (finding, bên, tầng, số, vắng mặt) khớp fact được
+  trích; `contradicted` khi mâu thuẫn; `insufficient` khi nêu thứ không fact nào
+  phủ. Dùng để **lọc** KD-C.
+* `models/verifier.py` (v2, học): phân loại 3 trạng thái trên "mệnh đề ‖ dữ kiện
+  của vùng trích", mẫu âm tổng hợp theo cấu trúc (đổi finding, đảo bên, thêm tầng
+  không có, đổi số). Dùng để **chấm**, nên bộ lọc không tự chấm mình.
+* `models/generator_s.py`: flan-T5 đọc `question | answer | facts | regions`,
+  sinh mệnh đề; `claims/constrain.CitationLogitsProcessor` chặn `</obs>` khi chưa
+  trích và chỉ cho mã vùng hợp lệ sau `[`; `enforce_citations` bảo đảm sau giải mã.
+  Target = mệnh đề KD-C đã lọc (hoặc mẫu câu B9 cho dòng "S không KD").
+* `models/generator_l.py`: MedGemma + **LoRA mới** (không dùng adapter teacher),
+  cùng input + ảnh — mốc trần Proposed-L.
+
+### (9) Suy luận và chấm — `inference/pipeline.py`
+
+Với mỗi câu hỏi của val/test (vùng từ detector):
+
+1. `decide()`: loại câu hỏi; finding được hỏi = tên trong câu hỏi, nếu câu hỏi
+   không nêu tên thì = lớp của vùng có relevance cao nhất; có mặt ⇔ xác suất
+   finding ≥ ngưỡng (và Yes/No với câu Is_there/Yes_No); bên, đếm từ head.
+2. `facts/build.build_facts` → bảng dữ kiện từ **vùng detector + giải phẫu + đầu
+   ra head** (presence, side, zone, count, extent, co-occurrence, absence; CTR
+   không bao giờ tính vì không biết tư thế chụp).
+3. `inference/templates.locked_answer_text` → chuỗi trả lời; `answer_lock.lock_answer`
+   khóa lại — generator không thể sửa (`enforce_answer_lock` chỉ sinh cảnh báo).
+4. `answer_lock.select_evidence` trên π_c → vùng bằng chứng hoặc `NO_SUPPORT`.
+5. Chọn dữ kiện: về finding được hỏi + dữ kiện trích vùng pointer.
+6. Generator (`template_simple` = B8, `template` = B9, `s`, `l`) → mệnh đề →
+   `enforce_citations` → verifier → trạng thái từng mệnh đề.
+7. JSON theo spec §2 (`answer, finding, scores, regions, facts, pointer, claims`)
+   vào `outputs/pipeline_{split}_{gen}.jsonl`; **cầu nối** `eval/vindr_bridge.compose`
+   dựng `"{answer} <loc_norm1000 của hộp trả lời>. Reasoning: {mệnh đề supported}"`
+   vào `reports/preds_{split}_{gen}.jsonl` — hộp trả lời = vùng pointer cùng lớp,
+   không có thì vùng relevance cao nhất cùng lớp, không có nữa thì **không phát
+   `<loc>`** (không bao giờ bịa hộp).
+
+Chấm: `eval/vindr_tables` gọi `vindr_cxr_vqa.evaluate` → Bảng 4–6 cạnh số của
+paper; `eval/tables_spec` → Bảng A (Yes/No F1 — N/A nếu không có mẫu âm, finding
+macro-F1, side acc, count MAE), B (Grounding@0,5, mIoU, answer&grounding),
+C (supported-claim P, citation P/R, coverage, contradiction, question relevance,
+độ gọn — **máy chấm**), F (ECE, latency); `eval/faithfulness` che vùng được trích
+và so tỉ lệ đổi đáp án với 4 đối chứng (ngẫu nhiên, vùng điểm cao không trích,
+vùng giải phẫu, vùng ghép từ ảnh khác).
+
+### (10) Phục vụ một ảnh — `serve.py`
+
+Cùng hợp đồng HTTP với `vindr_cxr_vqa.serve` (health, meta, samples, image,
+predict) nên React UI của VinDR dùng được ngay; thêm trường `evidence`
+(vùng, dữ kiện, pointer, mệnh đề kèm trạng thái). `--mock` chạy không cần torch;
+`Runner` trong `inference/pipeline.py` chạy detector → decision → pipeline cho
+một ảnh tải lên.
+
+### Những gì tạo ra ở mỗi lần chạy Kaggle
+
+`evidencekd-full.zip` = `outputs/` (checkpoint cuối, detections, decision, pipeline),
+`reports/` (mọi bảng, thresholds, kd_r_gate, faithfulness), `derived/`, `cache/`
+(KD-R, KD-C). Attach nó ở phiên sau: mọi giai đoạn có output sẵn sẽ tự bỏ qua,
+shard KD dở dang chạy tiếp.
+
 ## Running the full pipeline on Kaggle
 
 `notebooks/kaggle_full_pipeline.ipynb` chains every stage in one notebook and

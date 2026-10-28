@@ -7,7 +7,8 @@
 Batch mode scores a split from the cached files:
 
     python -m evidencekd.inference.pipeline --split test --generator template
-    python -m evidencekd.inference.pipeline --split test --generator s --generator-dir outputs/generator_s/final
+    python -m evidencekd.inference.pipeline --split test --generator s --generator-dir outputs/generator_s/final \
+        [--generator-config configs/generator.yaml]   # default: generator.yaml next to --config
     python -m evidencekd.inference.pipeline --split tune --tune       # choose thresholds -> reports/thresholds.json
 
 It writes ``outputs/pipeline_{split}_{generator}.jsonl`` (one JSON per
@@ -43,6 +44,23 @@ from evidencekd.models.verifier_rules import verify_all
 from evidencekd.utils.config import load_config
 
 DEFAULT_THRESHOLDS = {"finding": 0.5, "yes": 0.5, "absence": 0.3}
+
+
+def resolve_generator_config(config_path: str, explicit: str | None = None) -> str | None:
+    """The config file holding the ``generator_s`` / ``generator_l`` blocks.
+
+    ``--config`` is the *decision* config (paths, data, thresholds); the
+    generators are configured in ``configs/generator.yaml`` — and in the Kaggle
+    notebook in ``kaggle_generator.yaml``, next to its ``kaggle_decision.yaml``.
+    Returns ``None`` when no such file exists (fine for the template generator).
+    """
+    if explicit:
+        return explicit
+    d = os.path.dirname(os.path.abspath(config_path))
+    base = os.path.basename(config_path)
+    cands = [os.path.join(d, base.replace("decision", "generator"))] if "decision" in base else []
+    cands += [os.path.join(d, "generator.yaml"), os.path.join("configs", "generator.yaml")]
+    return next((p for p in cands if os.path.isfile(p)), None)
 
 
 def load_thresholds(path: str | None) -> dict:
@@ -180,7 +198,10 @@ def build_output(sample: VQASample | None, question: str, qtype: str, regions: R
 # ---------------------------------------------------------------------------
 def run_split(cfg, *, split: str, generator: str, decision_path: str | None, generator_dir: str | None,
               verifier_path: str | None, thresholds_path: str | None, out_path: str | None, limit: int | None,
-              teacher_cfg=None, regions_path: str | None = None, tag: str | None = None) -> dict:
+              teacher_cfg=None, regions_path: str | None = None, tag: str | None = None, gen_cfg=None) -> dict:
+    if generator in ("s", "l") and (gen_cfg is None or f"generator_{generator}" not in gen_cfg):
+        raise SystemExit(f"--generator {generator} needs the generator config (the 'generator_{generator}' block, "
+                         "which the decision config does not carry); pass --generator-config configs/generator.yaml")
     proc, derived = cfg.paths.processed_dir, cfg.paths.derived_dir
     images = load_images(proc)
     splits = splits_from_images(images)
@@ -204,12 +225,12 @@ def run_split(cfg, *, split: str, generator: str, decision_path: str | None, gen
     gen_fn, verifier = None, None
     if generator == "s":
         from evidencekd.models.generator_s import GeneratorS, build_input
-        gs = GeneratorS(cfg, generator_dir or os.path.join(cfg.paths.output_dir, "generator_s", "final"))
+        gs = GeneratorS(gen_cfg, generator_dir or os.path.join(cfg.paths.output_dir, "generator_s", "final"))
         gen_fn = lambda q, a, facts, ids, img: gs.generate([build_input(q, a, facts, ids)], [None], [ids])[0]  # noqa: E731
     elif generator == "l":
         from evidencekd.models.generator_l import GeneratorL
         from evidencekd.models.generator_s import build_input
-        gl = GeneratorL(cfg, teacher_cfg, generator_dir or os.path.join(cfg.paths.output_dir, "generator_l"))
+        gl = GeneratorL(gen_cfg, teacher_cfg, generator_dir or os.path.join(cfg.paths.output_dir, "generator_l"))
         gen_fn = lambda q, a, facts, ids, img: gl.generate(img, build_input(q, a, facts, ids))  # noqa: E731
     if verifier_path and os.path.isfile(verifier_path):
         from evidencekd.models.verifier import LearnedVerifier
@@ -291,7 +312,7 @@ class Runner:
 
     def __init__(self, dcfg, *, detector_ckpt: str, decision_ckpt: str, thresholds: dict | None = None,
                  anatomy_cache: str | None = None, background_path: str | None = None, generator="template",
-                 generator_dir: str | None = None, verifier_path: str | None = None):
+                 generator_dir: str | None = None, verifier_path: str | None = None, gen_cfg=None):
         import torch
         from evidencekd.models.decision_branch import DecisionDataset, collate, load_for_inference
         from evidencekd.models.detector import load_for_inference as load_det
@@ -308,7 +329,10 @@ class Runner:
         self.gen = None
         if generator == "s":
             from evidencekd.models.generator_s import GeneratorS
-            self.gen = GeneratorS(dcfg, generator_dir)
+            if gen_cfg is None or "generator_s" not in gen_cfg:
+                raise ValueError("generator 's' needs the generator config (the 'generator_s' block, which the "
+                                 "decision config does not carry); pass --generator-config configs/generator.yaml")
+            self.gen = GeneratorS(gen_cfg, generator_dir)
         self.verifier = None
         if verifier_path and os.path.isfile(verifier_path):
             from evidencekd.models.verifier import LearnedVerifier
@@ -360,6 +384,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--config", default="configs/decision.yaml")
     ap.add_argument("--teacher-config", default="configs/teacher.yaml")
+    ap.add_argument("--generator-config", default=None,
+                    help="config with the generator_s / generator_l blocks (default: generator.yaml next to --config)")
     ap.add_argument("--split", default="test", choices=["val", "test", "tune"])
     ap.add_argument("--generator", default="template", choices=["template", "template_simple", "s", "l"])
     ap.add_argument("--generator-dir", default=None)
@@ -374,13 +400,15 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
     tcfg = load_config(args.teacher_config) if os.path.isfile(args.teacher_config) else None
+    gpath = resolve_generator_config(args.config, args.generator_config)
+    gcfg = load_config(gpath) if gpath else None
     if args.tune:
         tune_thresholds(cfg, decision_path=args.decision,
                         out_path=args.thresholds or os.path.join(cfg.paths.get("reports_dir", "reports"), "thresholds.json"))
         return 0
     run_split(cfg, split=args.split, generator=args.generator, decision_path=args.decision, generator_dir=args.generator_dir,
               verifier_path=args.verifier, thresholds_path=args.thresholds, out_path=args.out, limit=args.limit,
-              teacher_cfg=tcfg, regions_path=args.regions, tag=args.tag)
+              teacher_cfg=tcfg, regions_path=args.regions, tag=args.tag, gen_cfg=gcfg)
     return 0
 
 

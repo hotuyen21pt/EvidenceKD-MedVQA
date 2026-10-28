@@ -242,3 +242,38 @@ class TestOnRealData:
             assert all(c.status == SUPPORTED for c in out if c.is_observation)
         # the repaired box is a fused box of its class, so it should usually be a region
         assert n_targets / len(samples) > 0.9, n_targets
+
+
+class TestGeneratorConfig:
+    """``--config`` is the decision config; the generator blocks live in
+    ``configs/generator.yaml``. Running ``--generator s`` with the decision
+    config alone used to die with ``config has no key 'generator_s'`` inside
+    ``GeneratorS.generate`` — after the model had already been loaded."""
+
+    def test_generator_blocks_are_not_in_the_decision_config(self):
+        from evidencekd.utils.config import load_config
+        assert "generator_s" not in load_config(os.path.join(REPO, "configs", "decision.yaml"))
+        assert "generator_s" in load_config(os.path.join(REPO, "configs", "generator.yaml"))
+
+    def test_resolve_generator_config(self, tmp_path, monkeypatch):
+        from evidencekd.inference.pipeline import resolve_generator_config
+        monkeypatch.chdir(tmp_path)          # the last candidate is ./configs/generator.yaml
+        d = tmp_path / "configs"
+        d.mkdir()
+        dec = d / "kaggle_decision.yaml"
+        dec.write_text("paths:\n  output_dir: out\n", encoding="utf-8")
+        assert resolve_generator_config(str(dec)) is None
+        (d / "generator.yaml").write_text("generator_s:\n  model: a\n", encoding="utf-8")
+        assert resolve_generator_config(str(dec)) == str(d / "generator.yaml")
+        kg = d / "kaggle_generator.yaml"
+        kg.write_text("generator_s:\n  model: b\n", encoding="utf-8")
+        assert resolve_generator_config(str(dec)) == str(kg), "the kaggle_* sibling wins"
+        assert resolve_generator_config(str(dec), "x.yaml") == "x.yaml", "explicit wins"
+
+    def test_run_split_refuses_generator_s_without_the_generator_config(self):
+        from evidencekd.inference.pipeline import run_split
+        from evidencekd.utils.config import Config
+        cfg = Config({"paths": {"processed_dir": str(tmp := os.path.join(REPO, "nope")), "derived_dir": tmp, "output_dir": tmp}})
+        with pytest.raises(SystemExit, match="generator_s"):
+            run_split(cfg, split="test", generator="s", decision_path=None, generator_dir=None, verifier_path=None,
+                      thresholds_path=None, out_path=None, limit=None)

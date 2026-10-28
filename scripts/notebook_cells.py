@@ -635,22 +635,28 @@ print("decision checkpoint for evaluation:", FINAL_DEC)
 FULL_STAGE3 = r'''
 VERIFIER = ""
 GEN_S = ""
-if glob.glob(os.path.join(CACHE, "kd_c", "*.jsonl")):
+V_PT = os.path.join(OUT, "verifier", "verifier.pt")
+GS_FINAL = os.path.join(OUT, "generator_s", "final")
+if os.path.isfile(V_PT) and not RETRAIN_GENERATOR:
+    VERIFIER = V_PT; print("verifier.pt da co -> bo qua train")
+elif glob.glob(os.path.join(CACHE, "kd_c", "*.jsonl")):
     sh("evidencekd.models.verifier", "train", "--config", CFG["generator"], "--output-dir", os.path.join(OUT, "verifier"), check=False)
-    if os.path.isfile(os.path.join(OUT, "verifier", "verifier.pt")):
-        VERIFIER = os.path.join(OUT, "verifier", "verifier.pt")
-if GEN_S_MODEL:
+    if os.path.isfile(V_PT):
+        VERIFIER = V_PT
+if os.path.isdir(GS_FINAL) and not RETRAIN_GENERATOR:
+    GEN_S = GS_FINAL; print("generator_s/final da co -> bo qua train")
+elif GEN_S_MODEL:
     rc = sh("evidencekd.models.generator_s", "train", "--config", CFG["generator"], "--output-dir", os.path.join(OUT, "generator_s"),
             *(["--limit", str(SMOKE)] if SMOKE else []), check=False)
-    if rc == 0 and os.path.isdir(os.path.join(OUT, "generator_s", "final")):
-        GEN_S = os.path.join(OUT, "generator_s", "final")
+    if rc == 0 and os.path.isdir(GS_FINAL):
+        GEN_S = GS_FINAL
 print("verifier:", VERIFIER or "rules only", "| generator S:", GEN_S or "not trained (template generator)")
 '''
 
 FULL_EVAL = r'''
 preds = {}
 for split in ("val", "test"):
-    gens = [("template", [])] + ([("s", ["--generator-dir", GEN_S])] if GEN_S else [])
+    gens = [("template", [])] + ([("s", ["--generator-dir", GEN_S, "--generator-config", CFG["generator"]])] if GEN_S else [])
     for gen, extra in gens:
         sh("evidencekd.inference.pipeline", "--config", CFG["decision"], "--split", split, "--generator", gen, *extra,
            *(["--verifier", VERIFIER] if VERIFIER else []))

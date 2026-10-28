@@ -38,12 +38,13 @@ def _rel(box, w, h):
 
 class Engine:
     def __init__(self, cfg, *, mock: bool, detector: str | None, decision: str | None, generator_s: str | None,
-                 verifier: str | None, thresholds: str | None):
+                 verifier: str | None, thresholds: str | None, generator_config: str | None = None):
         self.cfg = cfg; self.mock = mock
         self.images = load_images(cfg.paths.processed_dir)
         self.samples = {sp: load_samples(cfg.paths.processed_dir, sp) for sp in ("val", "test", "train")}
         self.by_id = {s.sample_id: s for sp in self.samples.values() for s in sp}
-        self.paths = {"detector": detector, "decision": decision, "generator_s": generator_s, "verifier": verifier, "thresholds": thresholds}
+        self.paths = {"detector": detector, "decision": decision, "generator_s": generator_s, "verifier": verifier,
+                      "thresholds": thresholds, "generator_config": generator_config}
         self.runner = None; self.state = "mock" if mock else "cold"; self.error = None; self.lock = threading.Lock()
 
     def ensure(self):
@@ -61,7 +62,8 @@ class Engine:
                                      anatomy_cache=os.path.join(derived, "anatomy.json"),
                                      background_path=os.path.join(derived, "background.json"),
                                      generator="s" if self.paths["generator_s"] else "template",
-                                     generator_dir=self.paths["generator_s"], verifier_path=self.paths["verifier"])
+                                     generator_dir=self.paths["generator_s"], verifier_path=self.paths["verifier"],
+                                     gen_cfg=load_config(self.paths["generator_config"]) if self.paths["generator_config"] else None)
                 self.state = "ready"
             except Exception as e:  # noqa: BLE001
                 self.state, self.error = "error", f"{type(e).__name__}: {e}"
@@ -216,6 +218,8 @@ def main(argv=None) -> int:
     ap.add_argument("--detector", default=os.environ.get("EKD_DETECTOR"))
     ap.add_argument("--decision", default=os.environ.get("EKD_DECISION"))
     ap.add_argument("--generator-s", default=os.environ.get("EKD_GENERATOR_S"))
+    ap.add_argument("--generator-config", default=None,
+                    help="config with the generator_s block (default: generator.yaml next to --config)")
     ap.add_argument("--verifier", default=os.environ.get("EKD_VERIFIER"))
     ap.add_argument("--thresholds", default=None)
     ap.add_argument("--ui-dir", default=os.path.join(REPO, "ui", "dist"))
@@ -225,8 +229,10 @@ def main(argv=None) -> int:
     cfg = load_config(args.config)
     if not args.mock and not (args.detector and args.decision):
         ap.error("--detector and --decision are required unless --mock")
+    from evidencekd.inference.pipeline import resolve_generator_config
     Handler.engine = Engine(cfg, mock=args.mock, detector=args.detector, decision=args.decision, generator_s=args.generator_s,
-                            verifier=args.verifier, thresholds=args.thresholds)
+                            verifier=args.verifier, thresholds=args.thresholds,
+                            generator_config=resolve_generator_config(args.config, args.generator_config) if args.generator_s else None)
     Handler.ui_dir = args.ui_dir if os.path.isdir(args.ui_dir) else ""
     if args.preload:
         Handler.engine.ensure()

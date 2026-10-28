@@ -134,6 +134,7 @@ DETECTOR_EPOCHS = None   # None = theo config (8)
 DECISION_EPOCHS = None   # None = theo config (6)
 RETRAIN_DETECTOR = False
 RETRAIN_DECISION = False
+RETRAIN_GENERATOR = False   # True = train lai verifier + generator S dù outputs/ đã có
 RUN_TEACHER = True
 KD_SHARDS = 30
 KD_R_SUBSET = 0.5        # 0.5 = nửa số ảnh train (design Q3); 1.0 = tất cả

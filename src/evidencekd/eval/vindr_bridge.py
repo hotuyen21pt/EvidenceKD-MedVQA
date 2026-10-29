@@ -78,7 +78,7 @@ class PredictionRow:
                 "gt_finding": self.gt_finding, "gt_location": self.gt_location}
 
 
-def _row(sample: VQASample, prediction: str) -> PredictionRow:
+def row_for(sample: VQASample, prediction: str) -> PredictionRow:
     gt_loc = loc_token(sample.gt_box, sample.image_width, sample.image_height) if sample.gt_box else ""
     return PredictionRow(sample.sample_id, sample.image_id, sample.question,
                          prediction, sample.gt_finding, gt_loc)
@@ -89,7 +89,7 @@ def oracle_rows(samples: Sequence[VQASample]) -> list[PredictionRow]:
     out = []
     for s in samples:
         boxes = [(s.gt_box, s.image_width, s.image_height)] if s.gt_box else []
-        out.append(_row(s, compose(s.gt_finding, boxes)))
+        out.append(row_for(s, compose(s.gt_finding, boxes)))
     return out
 
 
@@ -125,20 +125,20 @@ def detector_rows(
                 best_per_class.setdefault(d.class_name, d)
             names = [c for c in VQA_CLASSES if c in best_per_class]
             if not names:
-                out.append(_row(s, compose(s.question_finding or "No finding", [])))
+                out.append(row_for(s, compose(s.question_finding or "No finding", [])))
                 continue
             text = ", ".join(names)
             boxes = [(best_per_class[c].box, w, h) for c in names]
-            out.append(_row(s, compose(text, boxes)))
+            out.append(row_for(s, compose(text, boxes)))
             continue
         cls = s.question_finding
         if cls is None and fallback_top_class and dets:
             cls = dets[0].class_name
         if cls is None:
-            out.append(_row(s, compose("", [])))
+            out.append(row_for(s, compose("", [])))
             continue
         chosen = [d for d in dets if d.class_name == cls][:max_boxes]
-        out.append(_row(s, compose(cls, [(d.box, w, h) for d in chosen])))
+        out.append(row_for(s, compose(cls, [(d.box, w, h) for d in chosen])))
     return out
 
 

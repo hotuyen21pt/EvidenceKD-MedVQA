@@ -462,6 +462,7 @@ NEEDS.update({
     "src/evidencekd/inference/oracle_decisions.py": ["def write_oracle"],
     "src/evidencekd/eval/tables_spec.py": ["def compute"],
     "src/evidencekd/eval/vindr_tables.py": ["def evaluate"],
+    "src/evidencekd/eval/medgemma_baseline.py": ["def baseline_rows", "def adapter_for"],
     "src/evidencekd/teacher/kd_r_targets.py": ["def generate_shard", "def gate_shards"],
     "src/evidencekd/teacher/kd_c_targets.py": ["def generate_shard"],
     "src/evidencekd/models/generator_s.py": ["def train"],
@@ -654,6 +655,26 @@ elif GEN_S_MODEL:
 print("verifier:", VERIFIER or "rules only", "| generator S:", GEN_S or "not trained (template generator)")
 '''
 
+FULL_BASELINES = r'''
+# B4 (MedGemma + adapter VinDr) va pretrained (cung base, khong adapter) CHAY TREN
+# CHINH SPLIT nay -- de "co cai thien khong" tra loi duoc, thay vi dat canh hang so
+# val-659 cua paper. Ton kem: ~959 sinh/tag cho ca hai split, nen co resume.
+BASELINES = []
+if not RUN_BASELINES:
+    print("baselines bi tat (RUN_BASELINES=False)")
+elif not MEDGEMMA:
+    print("khong co MedGemma -> khong co B4/pretrained; bang so sanh chi con hang so val-659 cua paper")
+else:
+    BASELINES = ["pretrained"] + (["b4"] if ADAPTER else [])
+    if not ADAPTER:
+        print("co MedGemma nhung thieu adapter -> chi chay pretrained, KHONG co B4")
+    for split in BASELINE_SPLITS:
+        for tag in BASELINES:
+            sh("evidencekd.eval.medgemma_baseline", "--config", CFG["teacher"], "--split", split, "--tag", tag,
+               "--batch-size", BASELINE_BATCH, *(["--limit", str(SMOKE)] if SMOKE else []), check=False)
+print("baselines:", BASELINES or "(none)")
+'''
+
 FULL_EVAL = r'''
 preds = {}
 for split in ("val", "test"):
@@ -663,9 +684,11 @@ for split in ("val", "test"):
            *(["--verifier", VERIFIER] if VERIFIER else []))
         sh("evidencekd.eval.tables_spec", "--config", CFG["decision"], "--pipeline", os.path.join(OUT, f"pipeline_{split}_{gen}.jsonl"), "--split", split)
         preds.setdefault(split, []).append(os.path.join(REPORTS, f"preds_{split}_{gen}.jsonl"))
-    b7 = os.path.join(REPORTS, f"preds_{split}_b7.jsonl")
-    if os.path.isfile(b7):
-        preds[split].append(b7)
+    # B7 (ablation noi bo) va hai baseline MedGemma, deu tren split nay
+    for tag in ("b7", "pretrained", "b4"):
+        p = os.path.join(REPORTS, f"preds_{split}_{tag}.jsonl")
+        if os.path.isfile(p):
+            preds[split].append(p)
     sh("evidencekd.eval.vindr_tables", "--config", CFG["decision"], "--pred", *preds[split], "--split", split, check=False)
 sh("evidencekd.eval.faithfulness", "--config", CFG["decision"], "--checkpoint", FINAL_DEC,
    "--pipeline", os.path.join(OUT, "pipeline_test_template.jsonl"), "--split", "test", "--limit", "300", check=False)

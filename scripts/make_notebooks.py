@@ -139,6 +139,10 @@ RUN_TEACHER = True
 KD_SHARDS = 30
 KD_R_SUBSET = 0.5        # 0.5 = nửa số ảnh train (design Q3); 1.0 = tất cả
 TEACHER_BUDGET_MIN = 420 # phút tối đa dành cho KD-R + KD-C trong phiên này
+RUN_BASELINES = True     # chạy MedGemma pretrained + B4 trên CHÍNH split này, để
+                         # bảng 4-6 so sánh được cùng chế độ (spec §"Sau giai đoạn 1")
+BASELINE_SPLITS = ("test", "val")   # test (300) trước; val (659) để đặt cạnh số paper
+BASELINE_BATCH = 4
 OFFLINE = None
 EPOCHS = None
 """ + nc.FINDERS + nc.CODE_CHECK + nc.FULL_NEEDS + nc.RESOLVE
@@ -166,9 +170,11 @@ def build_full() -> dict:
         nc.code(nc.FULL_STAGE2),
         nc.md("## 7. Giai đoạn 3 — verifier học (khi có KD-C) và generator S (khi có flan-T5)"),
         nc.code(nc.FULL_STAGE3),
-        nc.md("## 8. Suy luận Proposed-S và chấm: Bảng A–C, F (spec) + Bảng 4–6 (VinDr) + faithfulness"),
+        nc.md("## 8. Baseline MedGemma trên chính split này — pretrained và B4 (fine-tuned)"),
+        nc.code(nc.FULL_BASELINES),
+        nc.md("## 9. Suy luận Proposed-S và chấm: Bảng A–C, F (spec) + Bảng 4–6 (VinDr) + faithfulness"),
         nc.code(nc.FULL_EVAL),
-        nc.md("## 9. Lưu output để resume / tải về"),
+        nc.md("## 10. Lưu output để resume / tải về"),
         nc.code(nc.FULL_SAVE),
     ])
 

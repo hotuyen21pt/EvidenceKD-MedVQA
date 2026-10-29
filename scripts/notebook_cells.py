@@ -603,18 +603,31 @@ else:
     t_start = time.time()
     def budget_left():
         return (time.time() - t_start) / 60 < TEACHER_BUDGET_MIN
-    for shard in range(KD_SHARDS):
-        if not budget_left():
-            print("KD-R: time budget reached; resume next session"); break
-        sh("evidencekd.teacher.kd_r_targets", "--config", CFG["teacher"], "--shard", shard, "--n-shards", KD_SHARDS,
-           *(["--limit", str(SMOKE)] if SMOKE else []), check=False)
+
+    def run_shards(module, kind):
+        """Shards are check=False so one bad sample cannot lose a whole session.
+        But when EVERY shard fails the cache stays empty, stage 2 silently
+        degrades to stage 1 and the run still exits 0 -- so stop here instead."""
+        tried = fails = 0
+        for shard in range(KD_SHARDS):
+            if not budget_left():
+                print(f"{kind}: time budget reached; resume next session"); break
+            tried += 1
+            rc = sh(module, "--config", CFG["teacher"], "--shard", shard, "--n-shards", KD_SHARDS,
+                    *(["--limit", str(SMOKE)] if SMOKE else []), check=False)
+            fails += (rc != 0)
+        produced = len(glob.glob(os.path.join(CACHE, kind.lower().replace("-", "_"), "*.jsonl")))
+        print(f"{kind}: {tried} shard chay, {fails} fail, {produced} file cache")
+        if tried and not produced:
+            raise SystemExit(
+                f"{kind}: TAT CA {tried} shard deu that bai, cache rong. Doc traceback dau tien o tren -- "
+                "neu khong dung lai day thi stage 2 se am tham bo qua va ca phien ket thuc exit 0 nhu the da chay.")
+        return produced
+
+    run_shards("evidencekd.teacher.kd_r_targets", "KD-R")
     sh("evidencekd.teacher.kd_r_targets", "--config", CFG["teacher"], "--gate", check=False)
     sh("evidencekd.teacher.kd_r_targets", "--config", CFG["teacher"], "--sensitivity", check=False)
-    for shard in range(KD_SHARDS):
-        if not budget_left():
-            print("KD-C: time budget reached; resume next session"); break
-        sh("evidencekd.teacher.kd_c_targets", "--config", CFG["teacher"], "--shard", shard, "--n-shards", KD_SHARDS,
-           *(["--limit", str(SMOKE)] if SMOKE else []), check=False)
+    run_shards("evidencekd.teacher.kd_c_targets", "KD-C")
 '''
 
 FULL_STAGE2 = r'''

@@ -40,23 +40,57 @@ def mask_region(image, box: Box, fx: float, fy: float, *, method: str = "constan
     return im
 
 
+def gpu_memory_gb() -> float:
+    try:
+        import torch
+    except ImportError:
+        return 0.0
+    if not torch.cuda.is_available():
+        return 0.0
+    return torch.cuda.get_device_properties(0).total_memory / 2**30
+
+
+def resolve_4bit(cfg, override: bool | None = None, *, vram_gb: float | None = None) -> bool:
+    """A concrete bool for ``load_in_4bit`` — never ``None``.
+
+    ``configs/teacher.yaml`` documents ``load_in_4bit: null`` as "4-bit on GPUs
+    under ~24 GB", but nothing implemented that: the ``None`` was handed
+    straight to ``vindr_cxr_vqa.load_base_model``, which then fell back to
+    ``cfg.train.load_in_4bit`` — a key EvidenceKD's teacher config has never
+    had. Decide it here so that fallback is never reached.
+    """
+    if override is not None:
+        return bool(override)
+    configured = cfg.model.get("load_in_4bit")
+    if configured is not None:
+        return bool(configured)
+    return (gpu_memory_gb() if vram_gb is None else vram_gb) < 24.0
+
+
+def build_vindr_config(cfg, *, load_in_4bit: bool) -> Config:
+    """The vindr-shaped config its loaders read (``train`` block included)."""
+    return Config({"model": {"name": cfg.model.name,
+                             "attn_implementation": cfg.model.get("attn_implementation", "eager"),
+                             "torch_dtype": cfg.model.get("torch_dtype", "auto")},
+                   "train": {"load_in_4bit": bool(load_in_4bit)},
+                   "eval": {"max_new_tokens": int(cfg.generation.max_new_tokens)},
+                   "generate": {"do_sample": False, "num_beams": 1}})
+
+
 class MedGemmaTeacher:
     def __init__(self, cfg, *, adapter: str | None = None, load_in_4bit: bool | None = None):
         import torch
         from vindr_cxr_vqa.infer import load_model, load_processor
 
         self.cfg = cfg
-        vcfg = Config({"model": {"name": cfg.model.name,
-                                 "attn_implementation": cfg.model.get("attn_implementation", "eager"),
-                                 "torch_dtype": cfg.model.get("torch_dtype", "auto")},
-                       "eval": {"max_new_tokens": int(cfg.generation.max_new_tokens)},
-                       "generate": {"do_sample": False, "num_beams": 1}})
+        four = resolve_4bit(cfg, load_in_4bit)
+        vcfg = build_vindr_config(cfg, load_in_4bit=four)
         self.vcfg = vcfg
         adapter = adapter if adapter is not None else cfg.model.get("adapter")
         if adapter and not os.path.isdir(adapter):
             raise FileNotFoundError(f"adapter directory not found: {adapter}")
         self.adapter = adapter
-        four = load_in_4bit if load_in_4bit is not None else cfg.model.get("load_in_4bit")
+        self.load_in_4bit = four
         self.model = load_model(vcfg, adapter, four)
         self.processor = load_processor(vcfg, adapter)
         self.tokenizer = self.processor.tokenizer

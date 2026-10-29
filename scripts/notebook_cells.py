@@ -97,6 +97,7 @@ NEEDS = {
     "src/evidencekd/data/detection_dataset.py": ["def build_index", "class VinDrDetectionDataset"],
     "src/evidencekd/data/vindr_processed.py": ["def load_images", "def splits_from_images"],
     "src/evidencekd/preflight.py": ["def run"],
+    "src/evidencekd/inference/pipeline.py": ["def run_split", "def resolve_generator_config"],
     "vindr_cxr_vqa/evaluate.py": ["def eval_boxes", "def eval_vqa"],
     "vindr_cxr_vqa/vindr.py": ["def fuse_boxes", "def load_images"],
 }

@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>EvidenceKD-MedVQA — Luồng pipeline từ huấn luyện đến suy luận</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 16mm 16mm; }
+  :root {
+    --ink: #16181d; --muted: #5b626e; --rule: #d6dae1; --soft: #f4f6f9;
+    --accent: #1f4e79; --warn: #8a4b00; --warnbg: #fff6e8; --ok: #0f6b3f;
+    --mono: "Consolas", "Cascadia Mono", "DejaVu Sans Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Arial", sans-serif; color: var(--ink);
+    font-size: 9.6pt; line-height: 1.52; margin: 0; -webkit-print-color-adjust: exact;
+  }
+  h1 { font-size: 20pt; line-height: 1.2; margin: 0 0 4pt; letter-spacing: -0.2pt; }
+  h2 {
+    font-size: 13pt; margin: 20pt 0 7pt; padding-bottom: 3pt;
+    border-bottom: 1.6pt solid var(--accent); color: var(--accent);
+    break-after: avoid; page-break-after: avoid;
+  }
+  h3 {
+    font-size: 10.6pt; margin: 13pt 0 5pt; color: var(--ink);
+    break-after: avoid; page-break-after: avoid;
+  }
+  h4 { font-size: 9.8pt; margin: 10pt 0 3pt; color: var(--muted); break-after: avoid; }
+  p { margin: 0 0 6pt; }
+  ul, ol { margin: 0 0 7pt; padding-left: 16pt; }
+  li { margin-bottom: 2.5pt; }
+  code { font-family: var(--mono); font-size: 8.6pt; background: var(--soft);
+         padding: 0.5pt 2.5pt; border-radius: 2px; }
+  pre {
+    font-family: var(--mono); font-size: 7.9pt; line-height: 1.42;
+    background: var(--soft); border: 0.6pt solid var(--rule); border-left: 2.4pt solid var(--accent);
+    padding: 7pt 9pt; margin: 6pt 0 9pt; white-space: pre; overflow-x: auto;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  pre.flow { font-size: 7.1pt; line-height: 1.34; }
+  table {
+    border-collapse: collapse; width: 100%; margin: 6pt 0 10pt; font-size: 8.5pt;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  th, td { border: 0.6pt solid var(--rule); padding: 3.4pt 5pt; text-align: left; vertical-align: top; }
+  th { background: var(--soft); font-weight: 600; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-size: 8pt; }
+  td code, th code { background: none; padding: 0; }
+  .lede { font-size: 10.4pt; color: var(--muted); margin: 0 0 10pt; }
+  .meta { font-size: 8.3pt; color: var(--muted); font-family: var(--mono); margin-bottom: 12pt; }
+  .box {
+    border: 0.8pt solid var(--rule); background: #fff; padding: 8pt 10pt; margin: 8pt 0 11pt;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  .warn { border-color: #e8c89a; background: var(--warnbg); }
+  .warn strong { color: var(--warn); }
+  .warn p:last-child, .box p:last-child { margin-bottom: 0; }
+  .hdr { border-bottom: 2.4pt solid var(--accent); padding-bottom: 9pt; margin-bottom: 14pt; }
+  .tag {
+    display: inline-block; font-size: 7.4pt; font-weight: 700; letter-spacing: 0.4pt;
+    text-transform: uppercase; padding: 1.4pt 5pt; border-radius: 2.5px; vertical-align: 1.5pt;
+  }
+  .t-train { background: #e4eef7; color: var(--accent); }
+  .t-inf   { background: #e3f1e9; color: var(--ok); }
+  .t-once  { background: #efe8f6; color: #5b3a86; }
+  .break { break-before: page; page-break-before: always; }
+  .small { font-size: 8.4pt; color: var(--muted); }
+  .kv { width: 100%; font-size: 8.6pt; }
+  .kv td:first-child { width: 31%; color: var(--muted); }
+  figcaption { font-size: 8.2pt; color: var(--muted); margin: -5pt 0 10pt; }
+  .toc { font-size: 9pt; columns: 2; column-gap: 18pt; }
+  .toc ol { margin: 0; padding-left: 15pt; }
+  .toc li { margin-bottom: 1.5pt; break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <h1>EvidenceKD-MedVQA — luồng pipeline<br>từ huấn luyện đến suy luận</h1>
+  <p class="lede">Lần theo <strong>một câu hỏi</strong> đi qua mọi giai đoạn: module nào chạy,
+  đọc file gì, ghi file gì, lệnh nào, và con số cụ thể ở từng bước.</p>
+  <div class="meta">
+    EvidenceKD-MedThink v4.1 · VinDr-CXR-VQA · repo <code>EvidenceKD-MedVQA</code><br>
+    Dựng ngày 2026-10-30 · commit <code>f73b28d</code> · 257 test pass (CPython 3.14, không GPU, không torch)
+  </div>
+</div>
+
+<div class="box warn">
+  <p><strong>Trạng thái — đọc trước khi dùng bất kỳ con số nào trong tài liệu này.</strong></p>
+  <p>Toàn bộ code của giai đoạn 0–3 đã viết và có test, nhưng <strong>chưa có lần huấn luyện nào
+  hoàn tất</strong>. Vì vậy tài liệu phân biệt rạch ròi hai loại số:</p>
+  <ul>
+    <li><strong>Số tính thật</strong> — kích thước tập dữ liệu, hộp của bác sĩ, kết quả gộp hộp,
+    nhãn huấn luyện, bảng dữ kiện, quy đổi tọa độ, và kết quả self-test oracle. Tất cả do chính
+    code trong repo tính ra và có thể dựng lại.</li>
+    <li><strong>Số minh họa</strong> — mọi đầu ra của mạng nơ-ron (logit, xác suất, log-prob của
+    teacher). Chúng đúng <em>kích thước</em> và đúng <em>công thức</em>, nhưng không phải kết quả đo.
+    Các khối này đều được đánh dấu.</li>
+  </ul>
+  <p>Không một con số nào ở đây được phép trích dẫn như một kết quả thực nghiệm.</p>
+</div>
+
+<h2>Mục lục</h2>
+<div class="toc">
+<ol>
+  <li>Kiến trúc một trang</li>
+  <li>Thứ tự chạy và sản phẩm mỗi bước</li>
+  <li>Dữ liệu vào</li>
+  <li>Giai đoạn 0 — detector</li>
+  <li>Dữ liệu dẫn xuất — hợp đồng vùng</li>
+  <li>Self-test oracle</li>
+  <li>Giai đoạn 1 — decision branch</li>
+  <li>Teacher MedGemma — KD-R và KD-C</li>
+  <li>Giai đoạn 2 — KD-R + faithfulness</li>
+  <li>Giai đoạn 3 — verifier và generator</li>
+  <li>Suy luận và chấm điểm</li>
+  <li><strong>Ví dụ bằng số: một câu hỏi đi hết pipeline</strong></li>
+  <li>Huấn luyện và suy luận — bảng đối chiếu</li>
+  <li>Chạy trên Kaggle</li>
+</ol>
+</div>
+
+<h2>1. Kiến trúc một trang</h2>
+
+<p>Nguyên tắc thiết kế: <strong>nhánh quyết định sinh ra câu trả lời; generator chỉ giải thích
+nó</strong>. Generator không được sửa đáp án (Answer Lock), mỗi mệnh đề nó viết phải trích một
+mã vùng có thật, và một verifier riêng chấm từng mệnh đề. Nhờ vậy lời giải thích không thể
+"trôi" khỏi bằng chứng — đó là toàn bộ lý do tồn tại của kiến trúc này.</p>
+
+<pre class="flow">VinDR-CXR-VQA (repo bên cạnh)                      EvidenceKD-MedVQA (repo này)
+┌──────────────────────────────┐
+│ data/processed/*.jsonl       │──(1) đọc─────▶ data/vindr_processed ──▶ VQASample, ImageRecord, ProcessedSplits
+│ images.json (boxes_raw/fused)│
+│ dataset/*.png 224px + CSV    │──(2) train───▶ models/detector  (GĐ 0) ──▶ outputs/detector/detector.pt
+│                              │                                           detections_{val,test}.json
+│ vindr_cxr_vqa.evaluate       │◀─(9) chấm────  eval/vindr_bridge      ◀── "{answer} &lt;loc_…&gt;. Reasoning: …"
+│ outputs/medgemma-lora        │──(6) teacher─▶ teacher/medgemma       ──▶ cache/kd_r, cache/kd_c
+└──────────────────────────────┘
+
+   (3) data/build_regions          ──▶ derived/regions_*.json, anatomy.json, negatives.jsonl,
+                                        labels_train.jsonl, background.json
+   (4) inference/oracle_decisions  ──▶ self-test qua scorer VinDr: P = 1,0 · IoU≥0,5 = 99,85 %
+   (5) models/decision_branch  GĐ 1 ──▶ outputs/decision/decision_stage1.pt, decision_{val,test}.jsonl,
+                                        reports/thresholds.json
+   (6) teacher/kd_r_targets, kd_c_targets ──▶ cache/kd_r/*.jsonl, cache/kd_c/*.jsonl
+   (7) models/decision_branch  GĐ 2 ──▶ decision_stage2.pt            (KD-R + faithfulness)
+   (8) models/verifier, generator_s  ──▶ outputs/verifier/verifier.pt, outputs/generator_s/final
+   (9) inference/pipeline            ──▶ outputs/pipeline_{split}_{gen}.jsonl, reports/preds_*.jsonl
+                                     ──▶ eval/tables_spec · eval/vindr_tables · eval/faithfulness
+  (10) serve + UI                    ──▶ hỏi từng ảnh: hộp, dữ kiện, mệnh đề, vùng được trích</pre>
+<figcaption>Thứ tự trên đúng bằng thứ tự các cell trong <code>notebooks/kaggle_full_pipeline.ipynb</code>.</figcaption>
+
+<h2>2. Thứ tự chạy và sản phẩm mỗi bước</h2>
+
+<table>
+<tr><th style="width:4%">#</th><th style="width:9%">Loại</th><th style="width:26%">Module</th>
+    <th style="width:32%">Sinh ra</th><th>Cần có trước</th></tr>
+<tr><td>1</td><td><span class="tag t-once">Một lần</span></td><td><code>scripts/build_data.py</code></td>
+    <td><code>data/processed/{train,val,test}.jsonl</code>, <code>images.json</code></td><td>repo VinDR-CXR-VQA</td></tr>
+<tr><td>2</td><td><span class="tag t-train">Train</span></td><td><code>models/detector</code></td>
+    <td><code>detector.pt</code>, <code>detections_{val,test}.json</code></td><td>(1) + trọng số COCO</td></tr>
+<tr><td>3</td><td><span class="tag t-once">Một lần</span></td><td><code>data/build_regions</code></td>
+    <td><code>derived/</code>: vùng, giải phẫu, nhãn, mẫu âm</td><td>(1), (2)</td></tr>
+<tr><td>4</td><td><span class="tag t-inf">Kiểm tra</span></td><td><code>inference/oracle_decisions</code></td>
+    <td>self-test qua scorer VinDr</td><td>(3)</td></tr>
+<tr><td>5</td><td><span class="tag t-train">Train</span></td><td><code>models/decision_branch --stage 1</code></td>
+    <td><code>decision_stage1.pt</code>, <code>thresholds.json</code></td><td>(2), (3)</td></tr>
+<tr><td>6</td><td><span class="tag t-once">Teacher</span></td><td><code>teacher/kd_r_targets</code>, <code>kd_c_targets</code></td>
+    <td><code>cache/kd_r/*.jsonl</code>, <code>cache/kd_c/*.jsonl</code></td><td>MedGemma + adapter VinDr</td></tr>
+<tr><td>7</td><td><span class="tag t-train">Train</span></td><td><code>decision_branch --stage 2</code></td>
+    <td><code>decision_stage2.pt</code></td><td>(5), (6)</td></tr>
+<tr><td>8</td><td><span class="tag t-train">Train</span></td><td><code>models/verifier</code>, <code>generator_s</code></td>
+    <td><code>verifier.pt</code>, <code>generator_s/final</code></td><td>(6), flan-T5</td></tr>
+<tr><td>9</td><td><span class="tag t-inf">Suy luận</span></td><td><code>inference/pipeline</code> + <code>eval/*</code></td>
+    <td><code>pipeline_*.jsonl</code>, Bảng A–C/F, Bảng 4–6</td><td>(7), (8)</td></tr>
+<tr><td>10</td><td><span class="tag t-inf">Phục vụ</span></td><td><code>serve.py</code></td>
+    <td>HTTP một ảnh, cùng hợp đồng với UI VinDr</td><td>(9)</td></tr>
+</table>
+
+<p class="small">Giai đoạn nào thiếu đầu vào thì notebook bỏ qua kèm thông báo — trừ KD: nếu
+<em>toàn bộ</em> shard KD-R hỏng thì phiên dừng hẳn, vì nếu không stage 2 sẽ âm thầm tụt về
+checkpoint stage 1 và cả phiên vẫn kết thúc exit 0 như thể đã chạy.</p>
+
+<h2>3. Dữ liệu vào — <code>data/vindr_processed.py</code></h2>
+
+<p>Không dựng lại gì. <code>scripts/build_data.py</code> gọi <code>vindr_cxr_vqa.build_dataset</code>
+với cấu hình mặc định, nên <code>data/processed/</code> giống <strong>từng byte</strong> với repo
+VinDR (kiểm bằng sha256 trong test).</p>
+
+<table class="kv">
+<tr><td>Quy mô</td><td>17.597 QA trên 4.394 ảnh</td></tr>
+<tr><td>Split</td><td>train 3.735 · val 659 · test 300 (⊂ val) · tune = val ∖ test = 359</td></tr>
+<tr><td>sha256 manifest</td><td><code>571df847…14ed8d7</code> (<code>reports/split_manifest.json</code>)</td></tr>
+<tr><td>Nguồn</td><td><code>build_dataset</code>, seed 42, val_ratio 0,15, test_size 300</td></tr>
+</table>
+
+<p>Mỗi <code>VQASample</code> mang câu hỏi, câu trả lời công bố, <code>reason</code>, loại câu hỏi,
+<code>gt_finding</code>, và <strong>hai hộp</strong>: <code>bbox_orig</code> (công bố, khoảng 60 % sai lớp)
+và <code>bbox_fixed_orig</code> (đã nối lại đúng lớp — hộp giám sát duy nhất dùng ở đây). Mỗi
+<code>ImageRecord</code> mang <code>boxes_raw</code> (từng bác sĩ) và <code>boxes_fused</code>
+(đồng thuận IoU 0,3, có <code>votes</code>).</p>
+
+<div class="box">
+<p><strong>Hai quy ước không bao giờ phá.</strong> (a) Tọa độ nội bộ luôn là <strong>pixel DICOM
+gốc</strong>; chỉ quy đổi ở ranh giới (224 px cho model, norm1000 cho chuỗi <code>&lt;loc&gt;</code>).
+(b) Mọi ngưỡng chọn trên <code>tune</code> (359 ảnh val ∖ test), <strong>không bao giờ trên test</strong>.</p>
+</div>
+
+<h2>4. Giai đoạn 0 — detector <span class="tag t-train">Train</span></h2>
+
+<p><code>data/detection_dataset.build_index</code> đọc CSV VinDr qua <code>vindr_cxr_vqa.vindr</code>,
+gộp ba lần đọc của bác sĩ ở IoU 0,3 (đúng tham số VinDR dùng để sửa hộp), giữ 14 lớp VQA, đổi hộp
+về không gian 224 px, <strong>loại mọi ảnh val/test</strong> rồi assert lại.</p>
+
+<p>Faster R-CNN R50-FPN (torchvision, khởi tạo từ trọng số COCO) upsample 224→512 bên trong model.
+Checkpoint mỗi epoch, <code>--resume auto</code> lấy checkpoint mới nhất — cần thiết vì một phiên
+Kaggle không đủ cho 8 epoch. <code>predict</code> ghi <code>detections_{split}.json</code> với hộp
+đã quy về pixel gốc. <code>eval/stage0</code> chấm mAP, Grounding@0,5, và qua cầu nối chấm dòng
+<strong>B7</strong> (detector-only baseline) trên Bảng 4–6 của VinDR.</p>
+
+<h2>5. Dữ liệu dẫn xuất — hợp đồng vùng</h2>
+
+<table>
+<tr><th style="width:24%">File trong <code>derived/</code></th><th style="width:40%">Dựng từ</th><th>Dùng ở đâu</th></tr>
+<tr><td><code>anatomy.json</code></td><td>torchxrayvision PSPNet (phổi/tim), fallback <code>A_thorax</code> = cả ảnh</td><td>dữ kiện bên / tầng / mức lan rộng</td></tr>
+<tr><td><code>regions_train.json</code></td><td><code>boxes_fused</code> → ≤ 8 vùng <code>R01…</code> xếp theo <code>votes</code> rồi diện tích, + 4 vùng giải phẫu <code>A_*</code></td><td>train GĐ 1–2, teacher KD-R che vùng, KD-C</td></tr>
+<tr><td><code>regions_{val,test}.json</code></td><td>detector (NMS theo lớp, ngưỡng điểm)</td><td>suy luận thật</td></tr>
+<tr><td><code>regions_*_annotation.json</code></td><td>annotation</td><td>oracle, phân tích</td></tr>
+<tr><td><code>labels_train.jsonl</code></td><td><code>data/qa_labels</code>: loại câu hỏi, Yes/No, finding đa nhãn, bên &amp; đếm <strong>tính hình học</strong>, <code>target_regions</code> = vùng IoU ≥ 0,5 với hộp sửa</td><td>mọi head, pointer, cổng KD-R</td></tr>
+<tr><td><code>negatives.jsonl</code></td><td>câu "Is there X?" → "No" trên ảnh train không có X</td><td>head Yes/No, dữ kiện <code>absence</code></td></tr>
+<tr><td><code>background.json</code></td><td>câu <code>reason</code> distinct theo finding</td><td>mệnh đề <code>background</code> đã duyệt</td></tr>
+</table>
+
+<div class="box">
+<p><strong><code>RegionSet</code> là hợp đồng dữ liệu chung của cả repo.</strong> Mã vùng
+(<code>R01</code>, <code>A_thorax</code>…) được chốt một lần ở đây. Pointer chọn vùng, mệnh đề trích
+vùng, KD-R che vùng — tất cả dùng cùng bộ mã đó. Nếu mã lệch nhau giữa hai bước thì KL giữa
+teacher và student mất nghĩa.</p>
+</div>
+
+<h2>6. Self-test oracle — cầu nối phải đúng trước khi tin model</h2>
+
+<p><code>inference/oracle_decisions.py</code> giả lập đầu ra decision branch từ annotation (xác suất
+finding 1/0, relevance và pointer đặt đúng vùng), chạy pipeline với generator mẫu câu, rồi chấm bằng
+chính <code>vindr_cxr_vqa.evaluate</code>. Nếu kết quả không gần hoàn hảo thì <strong>cầu nối
+hỏng</strong>, chứ không phải model.</p>
+
+<p>Đã chạy thật trên máy local, không GPU (<code>reports/eval_preds_val_oracle.json</code>,
+<code>reports/spec_pipeline_val_oracle.json</code>):</p>
+
+<table>
+<tr><th>Bảng</th><th>Chỉ số</th><th class="num">Giá trị</th><th>Ghi chú</th></tr>
+<tr><td>4 (VinDr)</td><td>precision / recall / F1</td><td class="num">1,0 / 0,9943 / 0,9972</td><td>659 ảnh, 2.637 dự đoán</td></tr>
+<tr><td>5 (VinDr)</td><td>mIoU_TP @ IoU≥0,3</td><td class="num">0,894</td><td>TP 2.601 · FP 0 · FN 3.812</td></tr>
+<tr><td>6 (VinDr)</td><td>ảnh có IoU ≥ 0,5</td><td class="num">99,85 %</td><td>658/659 ảnh</td></tr>
+<tr><td>A (spec)</td><td>finding macro-F1 / side acc / count MAE</td><td class="num">1,0 / 1,0 / 0,0</td><td>Yes/No = N/A (bản phát hành không có câu âm)</td></tr>
+<tr><td>B (spec)</td><td>Grounding@0,5 / mIoU / answer&amp;grounding</td><td class="num">0,9674 / 0,9049 / 0,9674</td><td>theo câu hỏi</td></tr>
+<tr><td>C (spec)</td><td>supported-P / citation P / citation R</td><td class="num">1,0 / 1,0 / 0,9697</td><td>máy chấm, không phải bác sĩ chấm</td></tr>
+</table>
+
+<p class="small">Recall ở Bảng 5 chỉ 0,41 là <em>đúng như mong đợi</em>: pipeline phát đúng một hộp
+cho mỗi câu trả lời, còn ground truth thô có 5.561 hộp của cả ba bác sĩ.</p>
+
+<h2>7. Giai đoạn 1 — decision branch <span class="tag t-train">Train</span></h2>
+
+<p>Một câu hỏi vào model dưới dạng: ảnh 224 px, danh sách hộp vùng (finding + giải phẫu) ở 224 px,
+mã lớp / loại vùng, và token câu hỏi.</p>
+
+<ol>
+  <li><strong>Backbone đóng băng</strong> của detector GĐ 0 → FPN. <code>MultiScaleRoIAlign</code>
+  7×7 trên hộp gốc <strong>và</strong> hộp mở rộng ×1,5 → ghép → token vùng d = 256, cộng embedding
+  loại (finding / giải phẫu / ảnh), lớp, và tọa độ chuẩn hóa; thêm một <strong>token toàn ảnh</strong>.</li>
+  <li><strong>Text encoder</strong>: <code>simple</code> (từ vựng dựng từ câu hỏi train + 2 lớp
+  Transformer, không cần tải gì) hoặc <code>hf</code> (CXR-BERT attach offline).</li>
+  <li><strong>Fusion</strong>: 2 lớp cross-attention hai chiều vùng ↔ token câu hỏi.</li>
+  <li><strong>Evidence encoder</strong>: 2 lớp Transformer trên [vùng ; câu hỏi].</li>
+  <li><strong>Heads</strong>: relevance ρ̂ⱼ, loại câu hỏi, finding đa nhãn (từ token toàn ảnh),
+  Yes/No, bên, đếm, và <strong>pointer</strong> π_c trên vùng finding + slot <code>NO_SUPPORT</code>.</li>
+</ol>
+
+<pre>L(GĐ 1) = BCE(relevance) + InfoNCE(alignment) + CE/BCE(các head)
+          + ( −log Σ_{j ∈ G} π_j )        G = target_regions; mẫu âm → slot null</pre>
+
+<p><code>predict</code> ghi <code>decision_{split}.jsonl</code> (xác suất từng head, relevance,
+pointer theo mã vùng của <code>regions_{split}.json</code>). <code>pipeline --tune</code> chọn ngưỡng
+finding trên <code>tune</code> theo F1 tập finding mỗi ảnh → <code>reports/thresholds.json</code>.</p>
+
+<h2>8. Teacher MedGemma — KD-R và KD-C</h2>
+
+<p><code>teacher/medgemma.py</code> nạp MedGemma-4B-it + <strong>adapter LoRA của VinDR</strong> qua
+chính <code>vindr_cxr_vqa.infer</code> — cùng prompt, cùng chat template mà adapter đã được train.
+Teacher bị đóng băng và không bao giờ chia sẻ trọng số với generator L.</p>
+
+<h3>KD-R — chưng cất vùng phản thực (<code>kd_r_targets.py</code>)</h3>
+<p>Với mỗi câu train: <code>a*</code> = câu trả lời công bố đã bỏ <code>&lt;loc&gt;</code>. Tính
+<code>log p_T(a* | I, Q)</code> teacher-forced trên ảnh gốc và trên ảnh <strong>che từng vùng</strong>
+<code>R01…R08</code> (tô đen trên PNG 224 px, trước processor, để hình chữ nhật sống sót qua resize).</p>
+
+<pre>rᵢ   = max(0, logp(gốc) − logp(che Rᵢ))     ← che làm teacher TỰ TIN HƠN thì cắt về 0
+π^T  = softmax([r₁ … r_M, r_∅] / τ_T)
+w_n  = 1[teacher đúng] · 1[mₙ ≥ δ] · cₙ     ← cổng chọn lọc; mₙ = khối lượng trên vùng đích</pre>
+
+<p>Ghi <code>cache/kd_r/shard-XXXX.jsonl</code>, resume theo shard (một phiên Kaggle không đủ).
+<code>--gate</code> tính trọng số và các dòng ablation Bảng E (<code>--no-*</code>,
+<code>--random-gate</code>); <code>--sensitivity</code> là điều kiện vào của spec §8.</p>
+
+<h3>KD-C — chưng cất mệnh đề (<code>kd_c_targets.py</code>)</h3>
+<p>Teacher nhận câu hỏi + đáp án mẫu + <strong>bảng dữ kiện tính từ annotation</strong>, sinh 3
+rationale. <code>teacher/prompts.claims_from_text</code> parse ngữ pháp
+<code>&lt;obs facts=F1&gt; … [R01] &lt;/obs&gt;</code>, hoặc gán câu tự do vào fact khớp.
+<code>kd/kd_c.build_targets</code> + verifier luật giữ lại từng mệnh đề đạt →
+<code>cache/kd_c/shard-XXXX.jsonl</code>.</p>
+
+<h2>9. Giai đoạn 2 — KD-R + faithfulness <span class="tag t-train">Train</span></h2>
+
+<p><code>decision_branch --stage 2 --init decision_stage1.pt</code> thêm hai số hạng vào mục tiêu
+GĐ 1:</p>
+<pre>L_KD-R   = Σₙ wₙ · KL(π^T_n ‖ π^S_n) / (Σₙ wₙ + ε)
+L_faith  = KL(π^cf ‖ π^S)
+           π^cf dựng bằng cách che TOKEN từng vùng trong evidence encoder và đo
+           sụt logit của finding được hỏi — kéo pointer về phía vùng mà chính
+           mạng dựa vào khi quyết định, chứ không phải vùng nó "nên" chỉ.</pre>
+<p>Cả hai dùng chung tập mã vùng vì train đọc <code>regions_train.json</code>.</p>
+
+<h2>10. Giai đoạn 3 — verifier và generator <span class="tag t-train">Train</span></h2>
+
+<table>
+<tr><th style="width:26%">Module</th><th>Vai trò</th></tr>
+<tr><td><code>verifier_rules.py</code> (v1)</td>
+    <td>Luật: <code>supported</code> khi ngữ pháp sạch và mọi thuộc tính nêu trong câu (finding, bên,
+    tầng, số, vắng mặt) khớp fact được trích; <code>contradicted</code> khi mâu thuẫn;
+    <code>insufficient</code> khi nêu thứ không fact nào phủ. Dùng để <strong>lọc</strong> KD-C.</td></tr>
+<tr><td><code>verifier.py</code> (v2, học)</td>
+    <td>Phân loại 3 trạng thái trên "mệnh đề ‖ dữ kiện của vùng trích", mẫu âm tổng hợp theo cấu trúc
+    (đổi finding, đảo bên, thêm tầng không có, đổi số). Dùng để <strong>chấm</strong> — nên bộ lọc
+    không tự chấm chính mình.</td></tr>
+<tr><td><code>generator_s.py</code></td>
+    <td>flan-T5 đọc <code>question | answer | facts | regions</code>, sinh mệnh đề.
+    <code>CitationLogitsProcessor</code> chặn <code>&lt;/obs&gt;</code> khi chưa trích và chỉ cho mã
+    vùng hợp lệ sau <code>[</code>; <code>enforce_citations</code> bảo đảm lại sau giải mã.</td></tr>
+<tr><td><code>generator_l.py</code></td>
+    <td>MedGemma + <strong>LoRA mới</strong> (không dùng adapter của teacher), cùng input + ảnh —
+    mốc trần Proposed-L.</td></tr>
+</table>
+
+<h2>11. Suy luận và chấm điểm <span class="tag t-inf">Suy luận</span></h2>
+
+<p>Với mỗi câu hỏi của val/test, vùng lấy từ detector (không phải annotation):</p>
+<ol>
+  <li><code>decide()</code> — loại câu hỏi; finding được hỏi = tên nêu trong câu hỏi, nếu câu hỏi
+  không nêu thì = lớp của vùng có relevance cao nhất; có mặt ⇔ xác suất ≥ ngưỡng; bên và đếm từ head.</li>
+  <li><code>facts/build.build_facts</code> → bảng dữ kiện từ vùng detector + giải phẫu + đầu ra head
+  (presence, side, zone, count, extent, co-occurrence, absence). CTR không bao giờ tính vì không
+  biết tư thế chụp.</li>
+  <li><code>templates.locked_answer_text</code> → chuỗi trả lời; <code>answer_lock.lock_answer</code>
+  khóa lại — generator không sửa được (<code>enforce_answer_lock</code> chỉ sinh cảnh báo).</li>
+  <li><code>answer_lock.select_evidence</code> trên π_c → vùng bằng chứng, hoặc <code>NO_SUPPORT</code>.</li>
+  <li>Chọn dữ kiện: về finding được hỏi + dữ kiện trích vùng pointer.</li>
+  <li>Generator (<code>template_simple</code> = B8, <code>template</code> = B9, <code>s</code>,
+  <code>l</code>) → mệnh đề → <code>enforce_citations</code> → verifier → trạng thái từng mệnh đề.</li>
+  <li>JSON theo spec §2 vào <code>outputs/pipeline_{split}_{gen}.jsonl</code>; cầu nối
+  <code>eval/vindr_bridge.compose</code> dựng chuỗi cho scorer VinDr.</li>
+</ol>
+
+<div class="box">
+<p><strong>Không bao giờ bịa hộp.</strong> Hộp trả lời = vùng pointer cùng lớp; không có thì vùng
+relevance cao nhất cùng lớp; không có nữa thì <strong>không phát <code>&lt;loc&gt;</code></strong>.</p>
+</div>
+
+<div class="break"></div>
+<h2>12. Ví dụ bằng số: một câu hỏi đi hết pipeline</h2>
+
+<p>Bản ghi thật <code>06b2ff94bd0270f543deb7074c2a006a_1</code> của tập val.</p>
+
+<h3>12.1 Đầu vào</h3>
+<table class="kv">
+<tr><td>Ảnh gốc</td><td>2500 × 3012 px → PNG 224 × 224 ⇒ <code>fx = 224/2500 = 0,0896</code>, <code>fy = 224/3012 = 0,0744</code></td></tr>
+<tr><td>Câu hỏi</td><td><code>Where is the Pulmonary fibrosis?</code> (<code>type = Where</code>, <code>gt_finding = Pulmonary fibrosis</code>)</td></tr>
+<tr><td>Trả lời công bố</td><td><code>"The fibrotic changes … within the specified region &lt;loc_2052_1893_2311_1950&gt;."</code></td></tr>
+<tr><td>Hộp công bố = hộp sửa</td><td><code>(2052, 1893, 2311, 1950)</code> — <code>repair_method = published</code></td></tr>
+<tr><td>Ảnh này có</td><td>5 câu hỏi (How_many, Where, Is_there, Which, Yes_No), cùng một hộp</td></tr>
+</table>
+
+<h3>12.2 Hộp của bác sĩ → vùng ứng viên <span class="small">(tính thật)</span></h3>
+
+<table>
+<tr><th>Lớp</th><th>Bác sĩ</th><th>Hộp (pixel gốc)</th></tr>
+<tr><td>Pulmonary fibrosis</td><td>R10</td><td><code>(2045, 1892, 2276, 1964)</code></td></tr>
+<tr><td>Pulmonary fibrosis</td><td>R8</td><td><code>(2052, 1893, 2312, 1950)</code> ← chính là hộp công bố</td></tr>
+<tr><td>Pulmonary fibrosis</td><td>R9</td><td><code>(2062, 1874, 2289, 1970)</code></td></tr>
+<tr><td>Pulmonary fibrosis</td><td>R8</td><td><code>(472, 826, 598, 1088)</code></td></tr>
+<tr><td>ILD</td><td>R10</td><td><code>(316, 768, 733, 2285)</code></td></tr>
+<tr><td>Aortic enlargement</td><td>R9</td><td><code>(1293, 887, 1577, 1190)</code></td></tr>
+</table>
+
+<p>Gộp ở IoU ≥ 0,3 (trung bình tọa độ) → <code>boxes_fused</code>, xếp theo <code>votes</code> rồi
+diện tích:</p>
+
+<table>
+<tr><th>Vùng</th><th>Lớp</th><th class="num">votes</th><th>Hộp pixel gốc</th><th>Hộp 224 px</th></tr>
+<tr><td><code>R01</code></td><td>Pulmonary fibrosis</td><td class="num">3</td><td><code>(2053,0 1886,5 2292,2 1961,4)</code></td><td><code>(184,0 140,3 205,4 145,9)</code></td></tr>
+<tr><td><code>R02</code></td><td>ILD</td><td class="num">1</td><td><code>(315,9 768,1 733,2 2284,8)</code></td><td><code>(28,3 57,1 65,7 169,9)</code></td></tr>
+<tr><td><code>R03</code></td><td>Aortic enlargement</td><td class="num">1</td><td><code>(1292,6 887,1 1576,6 1190,2)</code></td><td><code>(115,8 66,0 141,3 88,5)</code></td></tr>
+<tr><td><code>R04</code></td><td>Pulmonary fibrosis</td><td class="num">1</td><td><code>(472,0 826,5 597,6 1088,1)</code></td><td><code>(42,3 61,5 53,5 80,9)</code></td></tr>
+<tr><td><code>A_thorax</code></td><td>—</td><td class="num">—</td><td><code>(0, 0, 2500, 3012)</code></td><td><code>(0, 0, 224, 224)</code></td></tr>
+</table>
+
+<h3>12.3 Vùng đích và nhãn huấn luyện <span class="small">(tính thật)</span></h3>
+
+<pre>IoU(R01, hộp sửa):
+   giao x [2053,0 ; 2292,2] = 239,2      giao y [1893 ; 1950] = 57,0   → giao = 13 634
+   |gt| = 259 × 57 = 14 763              |R01| = 239,2 × 74,9 = 17 916
+   IoU = 13 634 / (14 763 + 17 916 − 13 634) = 13 634 / 19 045 = 0,716  ✓     (R04: 0,0)
+→ target_regions = ("R01",)</pre>
+
+<pre>labels_train.jsonl
+   question_type  = 0 (Where)              yes_no = 1
+   findings       = [0,1,0,0,1,0,0,0,0,0,0,1,0,0]   # lớp 1 PF · 4 Aortic enlargement · 11 ILD
+   side           = 2 (bilateral)
+                    tâm R01 x = 2172 &gt; đường giữa 1250 → "left"  (ảnh-phải = bệnh nhân-trái)
+                    tâm R04 x =  535 &lt; 1250            → "right"      ⇒ hai bên
+   count          = 2                      # 2 hộp PF sau NMS
+   target_regions = ["R01"]                asked_class = 1</pre>
+
+<h3>12.4 Bảng dữ kiện <span class="small">(tính thật, giả định nhánh quyết định báo có PF, AE, ILD)</span></h3>
+
+<pre>F1  presence  Aortic enlargement        [R03]            F2  side  left        [R03, A_thorax]
+F3  count     1                         [R03]            F4  presence ILD      [R02]
+F5  side      right                     [R02, A_thorax]  F6  count 1           [R02]
+F7  presence  Pulmonary fibrosis        [R01, R04]       F8  side  bilateral   [R01, R04, A_thorax]
+F9  count     2                         [R01, R04]
+F10 co_occurrence  Aortic enlargement with ILD                [R03, R02]
+F11 co_occurrence  Aortic enlargement with Pulmonary fibrosis [R03, R01, R04]
+F12 co_occurrence  ILD with Pulmonary fibrosis                [R02, R01, R04]
+F13 absence   Pneumothorax              [A_thorax]       # điểm toàn ảnh 0,02 &lt; ngưỡng vắng mặt 0,3</pre>
+<p class="small">Không có <code>zone</code>/<code>extent</code> vì giải phẫu fallback không có hộp phổi;
+không có <code>ctr</code> vì không biết tư thế chụp.</p>
+
+<h3>12.5 Decision branch — kích thước tensor <span class="small">(tính thật)</span></h3>
+
+<pre>ảnh        [3, 224, 224] ──transform──▶ [3, 512, 512]       (tỉ lệ 512/224 = 2,286)
+FPN        '0' [256,128,128]   '1' [256,64,64]   '2' [256,32,32]   '3' [256,16,16]
+hộp R01 ở 512 px = (420,5  320,7  469,5  333,5)   mở rộng ×1,5 = (408,3  317,5  481,8  336,7)
+ROIAlign   mỗi vùng: 2 × [256, 7, 7] = 2 × 12 544 ──Linear──▶ 2 × 256 ──merge──▶ 256
+token vùng = roi + emb_loại(finding) + emb_lớp(PF) + Linear(tọa độ chuẩn hóa)  → [256]
+tokens     [1 + 5, 256]          (IMG, R01, R02, R03, R04, A_thorax)
+câu hỏi    "where is the pulmonary fibrosis" → [CLS, where, is, the, pulmonary, fibrosis] → [6, 256]
+fusion ×2  vùng ↔ câu hỏi (cross-attention 8 head);  evidence encoder ×2 trên [6 + 6, 256]
+q_pool     trung bình 6 token câu hỏi → [256];     regf = 4 vùng finding → [4, 256]</pre>
+
+<h3>12.6 Heads — đầu ra và loss <span class="small">(SỐ MINH HỌA, không phải số đo)</span></h3>
+
+<pre>relevance logits  [ 2,1  −1,3  −0,4   0,2 ]  → σ = [0,89  0,21  0,40  0,55]
+   L_rel = BCE với nhãn [1,0,0,0] = (0,117 + 0,236 + 0,511 + 0,799) / 4 = 0,416
+
+finding probs     PF 0,93   AE 0,72   ILD 0,61   còn lại &lt; 0,10     (ngưỡng tune 0,5 → có: PF, AE, ILD)
+yes/no [0,06 0,94]    side [left 0,12  right 0,08  bilateral 0,80]    count [0,05 0,20 0,65 0,07 0,03]
+
+pointer logits    [ 1,8  −0,9  −0,2   0,3 | null −1,0 ]
+   exp            [6,05  0,41  0,82  1,35 | 0,37]        tổng 8,99
+   π^S            [0,673 0,045 0,091 0,150 | 0,041]
+   L_pointer = −log Σ_{G={R01}} π = −log 0,673 = 0,396
+
+alignment cos(q, zᵢ) = [0,62 0,10 0,21 0,35], τ = 0,07 → /τ = [8,86 1,43 3,00 5,00]
+   L_align = −log( e^8,86 / (e^8,86 + e^1,43 + e^3,00 + e^5,00) ) = −log(7040 / 7213) = 0,024
+
+Evidence Pointer lúc suy luận: top_k = 3, min_p = 0,05, phải &gt; null 0,041
+   → region_ids = [R01 (0,673), R04 (0,150), R03 (0,091)]      status = SUPPORTED</pre>
+
+<h3>12.7 Teacher KD-R <span class="small">(SỐ MINH HỌA)</span></h3>
+
+<pre>log p_T(a* | ảnh gốc)   = −0,42
+log p_T(a* | che R01)   = −0,95   → r₁ = max(0, −0,42 + 0,95) = 0,53
+log p_T(a* | che R02)   = −0,44   → r₂ = 0,02
+log p_T(a* | che R03)   = −0,40   → r₃ = max(0, −0,02) = 0     ← che làm teacher TỰ TIN HƠN → cắt 0
+log p_T(a* | che R04)   = −0,50   → r₄ = 0,08
+r_∅ = 0
+
+τ_T = 1,0  (configs/kd_r.yaml)
+   π^T = softmax([0,53  0,02  0  0,08 | 0]) = [0,293 0,176 0,172 0,187 | 0,172]
+   khối lượng trên vùng đích R01 = 0,293 &lt; δ = 0,5
+   → CỔNG KHÔNG QUA (gate_reason = mass_below_delta) → w = 0, mẫu này không vào loss
+
+τ_T = 0,2
+   π^T = softmax([2,65  0,10  0  0,40 | 0]) = [0,755 0,059 0,053 0,080 | 0,053]
+   m = 0,755 ≥ 0,5 ✓   teacher đúng (câu sinh ra có "pulmonary fibrosis") ✓   c = exp(−0,42) = 0,657
+   → w = 0,657
+   KL(π^T ‖ π^S) = Σ p · ln(p/q)
+     = 0,755·ln(0,755/0,673) + 0,059·ln(0,059/0,045) + 0,053·ln(0,053/0,091)
+       + 0,080·ln(0,080/0,150) + 0,053·ln(0,053/0,041)
+     = 0,087 + 0,016 − 0,029 − 0,050 + 0,014 = 0,037
+   L_KD-R (một mẫu) = w · KL / (w + ε) = 0,037</pre>
+
+<div class="box warn">
+<p><strong>Vì sao phải báo cáo <code>r_null</code> và <code>τ_T</code> cùng mọi kết quả KD-R.</strong>
+Hai dòng trên khác nhau <em>duy nhất</em> ở τ_T, nhưng một dòng loại mẫu khỏi loss còn dòng kia giữ
+lại với trọng số 0,657. Hai siêu tham số này quyết định mẫu nào qua cổng, nên một con số KD-R không
+kèm chúng là không diễn giải được.</p>
+</div>
+
+<h3>12.8 Faithfulness giai đoạn 2 <span class="small">(SỐ MINH HỌA)</span></h3>
+
+<pre>logit PF đầy đủ = 2,6   (log σ = −0,072)
+   bỏ R01 → 0,90  (log σ = −0,341) → sụt 0,270        bỏ R02 → 2,50 → 0,006
+   bỏ R03 → 2,55                   → sụt 0,003        bỏ R04 → 2,20 (log σ = −0,105) → 0,034
+π^cf = softmax([0,270 0,006 0,003 0,034 | 0]) = [0,245 0,188 0,187 0,193 | 0,187]
+L_faith = KL(π^cf ‖ π^S) ≈ 0,49</pre>
+
+<h3>12.9 Suy luận và chuỗi cầu nối <span class="small">(generator mẫu câu B9, verifier luật)</span></h3>
+
+<pre>decide()        type Where; finding được hỏi = "Pulmonary fibrosis" (nêu trong câu hỏi)
+                có mặt (0,93 ≥ 0,5); side = bilateral (0,80); findings_present = [PF, AE, ILD]
+locked answer   "Pulmonary fibrosis is seen bilaterally."
+dữ kiện chọn    về PF → F7, F8, F9, F11, F12;  trích vùng pointer R01/R04/R03 → thêm F1, F2, F3
+
+mệnh đề   &lt;obs facts=F7&gt;  Pulmonary fibrosis is present. [R01] &lt;/obs&gt;                     → supported
+          &lt;obs facts=F8&gt;  The finding is bilateral. [R01] &lt;/obs&gt;                          → supported
+          &lt;obs facts=F9&gt;  There are 2 lesions. [R01] &lt;/obs&gt;                               → supported
+          &lt;obs facts=F11&gt; Aortic enlargement co-occurs with Pulmonary fibrosis. [R03] &lt;/obs&gt; → supported
+          Pulmonary fibrosis involves irreversible scarring of the lung tissue…   (background, từ `reason`)
+
+hộp trả lời = vùng pointer đầu tiên cùng lớp = R01 = (2053,0  1886,5  2292,2  1961,4)
+norm1000    x · 999/2500 = ×0,3996      y · 999/3012 = ×0,3317
+            2053,0→820   1886,5→626   2292,2→916   1961,4→651     → &lt;loc_820_626_916_651&gt;
+
+chuỗi nộp cho scorer VinDr:
+   "Pulmonary fibrosis is seen bilaterally &lt;loc_820_626_916_651&gt;. Reasoning: Pulmonary fibrosis
+    is present. The finding is bilateral. There are 2 lesions. Aortic enlargement co-occurs with
+    Pulmonary fibrosis."</pre>
+
+<p class="small">Hộp sửa của đề bài quy đổi là <code>&lt;loc_820_628_923_647&gt;</code>; hai chuỗi lệch
+vài đơn vị vì <code>R01</code> là hộp <strong>đồng thuận ba bác sĩ</strong> còn
+<code>gt_location</code> là hộp của một bác sĩ.</p>
+
+<h3>12.10 Scorer chấm chuỗi đó <span class="small">(tính thật cho ảnh này)</span></h3>
+
+<pre>Bảng 4  (theo ảnh, 14 lớp)  câu trả lời nêu PF, AE, ILD; hộp thô của ảnh có đúng 3 lớp đó
+                            → TP 3 · FP 0 · FN 0 · TN 11      (precision 1,0 · recall 1,0)
+Bảng 5  (hộp dự đoán vs hộp thô, IoU ≥ 0,3, match "any")
+        IoU(R01, hộp R8) = 13 665 / (17 916 + 14 837 − 13 665) = 0,716 ≥ 0,3 → TP, mIoU_TP cộng 0,716
+Bảng 6  (theo ảnh)          IoU tốt nhất 0,716 ≥ 0,5 → ảnh được tính "định vị tốt"
+Bảng B  (spec, theo câu)    IoU(hộp trả lời, gt sửa) = 0,716 ≥ 0,5 → Grounding@0,5 = 1
+                            answer đúng → Answer&amp;grounding = 1
+Bảng C  (spec)              4 observation, 4 supported → supported-claim P = 1,0
+                            3/4 mệnh đề nêu "Pulmonary fibrosis" → question relevance = 0,75</pre>
+
+<h3>12.11 Can thiệp — kiểm tra faithfulness (Bảng F)</h3>
+
+<p>Tô đen <code>R01</code> trên PNG 224 px (hình chữ nhật <code>(184, 140)–(205, 146)</code>) rồi chạy
+lại nhánh quyết định. Nếu xác suất PF rơi từ 0,93 xuống dưới 0,5 thì "đổi đáp án" = 1 cho đối chứng
+<code>cited</code>. Làm tương tự với <code>R03</code> (<code>random</code> / <code>uncited_top</code>),
+<code>A_thorax</code>, và ô <code>R01</code> ghép từ ảnh khác (<code>other_image</code>).</p>
+
+<div class="box">
+<p><strong>Hệ thống chỉ được gọi là faithful khi tỉ lệ đổi đáp án của <code>cited</code> vượt
+cả bốn đối chứng.</strong> Một mô hình trích vùng đẹp nhưng không thật sự dựa vào vùng đó sẽ trượt
+bài kiểm tra này — đó chính là điều nó được thiết kế để bắt.</p>
+</div>
+
+<h2>13. Huấn luyện và suy luận — bảng đối chiếu</h2>
+
+<table>
+<tr><th style="width:17%"></th><th style="width:41%">Huấn luyện</th><th>Suy luận</th></tr>
+<tr><td>Nguồn vùng</td><td><code>regions_train.json</code> — từ <code>boxes_fused</code> (annotation)</td>
+    <td><code>regions_{val,test}.json</code> — từ <strong>detector</strong></td></tr>
+<tr><td>Hộp giám sát</td><td><code>bbox_fixed_orig</code> (đã nối đúng lớp)</td><td>không dùng</td></tr>
+<tr><td>Nhãn</td><td><code>labels_train.jsonl</code> + <code>negatives.jsonl</code></td><td>không có</td></tr>
+<tr><td>Teacher</td><td>cache KD-R / KD-C đọc từ đĩa (không nạp MedGemma lúc train)</td><td>không dùng</td></tr>
+<tr><td>Ngưỡng</td><td>chọn trên <code>tune</code> = val ∖ test (359 ảnh)</td><td>đọc <code>thresholds.json</code></td></tr>
+<tr><td>Đầu ra</td><td>checkpoint <code>.pt</code></td><td><code>pipeline_*.jsonl</code> + <code>preds_*.jsonl</code></td></tr>
+</table>
+
+<h4>Lệnh — huấn luyện</h4>
+<pre>python -m evidencekd.models.detector        train   --config configs/detector.yaml --resume auto
+python -m evidencekd.data.build_regions             --config configs/detector.yaml
+python -m evidencekd.models.decision_branch train   --config configs/decision.yaml --stage 1 --resume auto
+python -m evidencekd.teacher.kd_r_targets           --config configs/teacher.yaml  --shard 0 --n-shards 30
+python -m evidencekd.teacher.kd_r_targets           --config configs/teacher.yaml  --gate
+python -m evidencekd.teacher.kd_c_targets           --config configs/teacher.yaml  --shard 0 --n-shards 30
+python -m evidencekd.models.decision_branch train   --config configs/decision.yaml --stage 2 --init decision_stage1.pt
+python -m evidencekd.models.verifier        train   --config configs/decision.yaml
+python -m evidencekd.models.generator_s     train   --config configs/generator.yaml</pre>
+
+<h4>Lệnh — suy luận và chấm</h4>
+<pre>python -m evidencekd.models.detector        predict --config configs/detector.yaml \
+       --checkpoint outputs/detector/detector.pt --split test
+python -m evidencekd.models.decision_branch predict --config configs/decision.yaml \
+       --checkpoint outputs/decision/decision_stage2.pt --split test
+python -m evidencekd.inference.pipeline             --config configs/decision.yaml --tune
+python -m evidencekd.inference.pipeline             --config configs/decision.yaml --split test --generator s
+python -m evidencekd.eval.tables_spec               --config configs/decision.yaml --split test
+python -m evidencekd.eval.vindr_tables              --config configs/decision.yaml --split test
+python -m evidencekd.eval.faithfulness              --config configs/decision.yaml --split test</pre>
+
+<h4>Chạy cả chuỗi suy luận mà không cần torch</h4>
+<pre>python -m evidencekd.inference.oracle_decisions --config configs/decision.yaml --split val
+python -m evidencekd.inference.pipeline         --config configs/decision.yaml --split val --generator template
+python -m evidencekd.eval.vindr_tables          --config configs/decision.yaml --split val
+# → precision 1,0 · 99,85 % ảnh IoU ≥ 0,5 · Grounding@0,5 = 0,9674</pre>
+
+<h2>14. Chạy trên Kaggle</h2>
+
+<table>
+<tr><th style="width:11%">Giai đoạn</th><th style="width:48%">Chạy gì</th><th>Input phải attach</th></tr>
+<tr><td>0</td><td>detector → detections → B7 Bảng 4–6</td><td>code zip, ảnh, trọng số COCO</td></tr>
+<tr><td>derived</td><td>vùng, giải phẫu, mẫu âm, nhãn; <strong>self-test oracle</strong></td><td>—</td></tr>
+<tr><td>1</td><td>decision branch → ngưỡng trên val ∖ test</td><td>—</td></tr>
+<tr><td>teacher</td><td>KD-R + KD-C, chia shard, có ngân sách thời gian</td><td><strong>MedGemma</strong> + <code>medgemma-lora.zip</code></td></tr>
+<tr><td>2</td><td>decision branch + KD-R + faithfulness</td><td>cache KD-R</td></tr>
+<tr><td>3</td><td>verifier học (cache KD-C), generator S</td><td>flan-T5</td></tr>
+<tr><td>eval</td><td>Proposed-S → Bảng A–C/F, Bảng 4–6, can thiệp faithfulness</td><td>—</td></tr>
+</table>
+
+<div class="box warn">
+<p><strong>MedGemma phải là checkpoint vision-language.</strong> Teacher nạp qua
+<code>AutoModelForImageTextToText</code>. Notebook chỉ nhận thư mục có <code>vision_config</code>
+trong <code>config.json</code>; một flan-T5 (attach cho generator S) sẽ bị từ chối ngay ở cell setup
+thay vì làm hỏng toàn bộ 30 shard KD-R ở cell 9. Cell setup in ra
+<code>MEDGEMMA … (model_type='gemma3')</code> để xác nhận.</p>
+</div>
+
+<h4>Resume giữa các phiên</h4>
+<p><code>evidencekd-full.zip</code> gồm <code>outputs/</code> (checkpoint, detections, decision,
+pipeline), <code>reports/</code> (mọi bảng, thresholds, kd_r_gate, faithfulness),
+<code>derived/</code> và <code>cache/</code> (KD-R, KD-C). Attach nó ở phiên sau: giai đoạn nào đã có
+output sẽ tự bỏ qua, shard KD dở dang chạy tiếp.</p>
+
+<h4>Dựng lại tài liệu này</h4>
+<pre>python scripts/make_notebooks.py           # notebook sinh ra, không sửa tay
+python scripts/make_kaggle_bundle.py --part code
+python -m pytest -q                        # 257 passed</pre>
+
+<p class="small" style="margin-top:14pt; border-top:0.6pt solid var(--rule); padding-top:7pt;">
+Nguồn của tài liệu: <code>README.md</code> (mục “Luồng xử lý chi tiết”),
+<code>docs/method_spec_v4.1.md</code>, <code>reports/eval_preds_val_oracle.json</code>,
+<code>reports/spec_pipeline_val_oracle.json</code>, <code>reports/split_manifest.json</code>,
+và mã nguồn trong <code>src/evidencekd/</code> (8.440 dòng). Mọi số đầu ra của mạng nơ-ron trong
+tài liệu là minh họa — chưa có lần huấn luyện nào hoàn tất.
+</p>
+
+</body>
+</html>

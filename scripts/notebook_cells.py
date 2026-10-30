@@ -669,6 +669,17 @@ else:
                 "neu khong dung lai day thi stage 2 se am tham bo qua va ca phien ket thuc exit 0 nhu the da chay.")
         return produced
 
+    # One sample first. A config or loader mistake kills every shard in the
+    # same way, and learning that after 30 identical failures has now cost
+    # three teacher stages -- the traceback also ends up buried in the weight
+    # loader's progress bars, where it is hard to even find. The row this
+    # writes is kept: the real shard 0 resumes past it.
+    print("[canary] one KD-R sample before the shard loop", flush=True)
+    if sh("evidencekd.teacher.kd_r_targets", "--config", CFG["teacher"],
+          "--shard", 0, "--n-shards", KD_SHARDS, "--limit", 1, check=False):
+        raise SystemExit("KD-R canary that fails on one sample fails on all 30 shards. "
+                         "Doc traceback ngay o tren -- dung chay tiep.")
+
     run_shards("evidencekd.teacher.kd_r_targets", "KD-R")
     sh("evidencekd.teacher.kd_r_targets", "--config", CFG["teacher"], "--gate", check=False)
     sh("evidencekd.teacher.kd_r_targets", "--config", CFG["teacher"], "--sensitivity", check=False)

@@ -93,12 +93,25 @@ def check_image_text_model(name: str) -> None:
     )
 
 
+#: Coordinate space in the prompt. Must equal what the LoRA adapter was
+#: trained with (vindr ``configs/default.yaml``: ``loc_format: norm1000``) --
+#: a mismatch changes the prompt the adapter sees without raising anything.
+LOC_FORMAT = "norm1000"
+
+
 def build_vindr_config(cfg, *, load_in_4bit: bool) -> Config:
-    """The vindr-shaped config its loaders read (``train`` block included)."""
+    """The vindr-shaped config its loaders and ``answer()`` read.
+
+    Every block here exists because some function in ``vindr_cxr_vqa`` reads
+    it; ``tests/test_teacher_loading.py`` scans that source and fails when a
+    key is missing, because twice now one has been -- ``train`` and then
+    ``data`` -- each time only on Kaggle, after the 4 GB model had loaded.
+    """
     return Config({"model": {"name": cfg.model.name,
                              "attn_implementation": cfg.model.get("attn_implementation", "eager"),
                              "torch_dtype": cfg.model.get("torch_dtype", "auto")},
                    "train": {"load_in_4bit": bool(load_in_4bit)},
+                   "data": {"loc_format": cfg.model.get("loc_format", LOC_FORMAT)},
                    "eval": {"max_new_tokens": int(cfg.generation.max_new_tokens)},
                    "generate": {"do_sample": False, "num_beams": 1}})
 
@@ -127,7 +140,7 @@ class MedGemmaTeacher:
     # ------------------------------------------------------------------
     def _prompt_text(self, question: str, *, system: str | None = None) -> str:
         from vindr_cxr_vqa.prompts import build_messages
-        msgs = build_messages({"question": question}, None, "norm1000")
+        msgs = build_messages({"question": question}, None, self.vcfg.data.loc_format)
         if system is not None:
             msgs[0] = {"role": "system", "content": [{"type": "text", "text": system}]}
         return self.processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)

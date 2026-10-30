@@ -10,6 +10,8 @@ here — a missing ``train`` key killed every KD-R and KD-C shard on Kaggle with
 from __future__ import annotations
 
 import json
+import os
+import re
 
 import pytest
 
@@ -125,3 +127,63 @@ class TestBaseCheckpointIsAVisionModel:
         d = tmp_path / "empty"
         d.mkdir()
         check_image_text_model(str(d))
+
+
+class TestEveryKeyTheVindrPathReads:
+    """The vindr config shape, checked against vindr's source, not a memory of it.
+
+    This has now bitten twice on Kaggle, both times after the model had
+    loaded, both times costing a whole teacher stage:
+
+        AttributeError: config has no key 'train'; keys: [eval, generate, model]
+        AttributeError: config has no key 'data';  keys: [eval, generate, model, train]
+
+    So rather than add the missing key and wait for the third, read the
+    functions ``MedGemmaTeacher`` actually calls and require the config to
+    cover every ``cfg.<block>.<key>`` they touch.
+    """
+
+    #: (file, function) of each vindr entry point the teacher goes through.
+    ENTRY_POINTS = (("infer.py", "load_model"), ("infer.py", "load_processor"),
+                    ("infer.py", "answer"), ("modeling.py", "load_base_model"))
+
+    @staticmethod
+    def vindr_dir():
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.normpath(os.path.join(here, "..", "VinDR-CXR-VQA", "vindr_cxr_vqa"))
+
+    @classmethod
+    def keys_read_by(cls, filename, function):
+        """``{(block, key)}`` that one vindr function reads off its config.
+
+        Parsed from source: importing it would pull in torch, which this
+        suite deliberately runs without.
+        """
+        path = os.path.join(cls.vindr_dir(), filename)
+        src = open(path, encoding="utf-8").read()
+        body = re.search(rf"^def {function}\(.*?(?=^(?:@|def )|\Z)", src, re.M | re.S)
+        assert body, f"{function} not found in {path}"
+        return set(re.findall(r"\bcfg\.(\w+)\.(\w+)", body.group(0)))
+
+    @pytest.mark.parametrize("filename,function", ENTRY_POINTS)
+    def test_the_config_carries_every_key(self, filename, function):
+        if not os.path.isdir(self.vindr_dir()):
+            pytest.skip("sibling VinDR-CXR-VQA checkout not present")
+        vcfg = build_vindr_config(teacher_cfg(), load_in_4bit=False)
+        for block, key in sorted(self.keys_read_by(filename, function)):
+            node = getattr(vcfg, block, None)
+            assert node is not None, f"{function} reads cfg.{block}.{key}; no {block!r} block"
+            assert key in node, f"{function} reads cfg.{block}.{key}; block {block!r} lacks it"
+
+    def test_the_scan_actually_finds_something(self):
+        # a regex that silently matched nothing would make the test above vacuous
+        if not os.path.isdir(self.vindr_dir()):
+            pytest.skip("sibling VinDR-CXR-VQA checkout not present")
+        assert ("data", "loc_format") in self.keys_read_by("infer.py", "answer")
+        assert ("train", "load_in_4bit") in self.keys_read_by("modeling.py", "load_base_model")
+
+    def test_the_loc_format_is_the_one_the_adapter_was_trained_with(self):
+        # vindr configs/default.yaml: loc_format: norm1000. A mismatch here
+        # changes the prompt the LoRA adapter sees, silently.
+        vcfg = build_vindr_config(teacher_cfg(), load_in_4bit=False)
+        assert vcfg.data.loc_format == "norm1000"

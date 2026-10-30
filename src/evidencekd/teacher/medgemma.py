@@ -67,6 +67,32 @@ def resolve_4bit(cfg, override: bool | None = None, *, vram_gb: float | None = N
     return (gpu_memory_gb() if vram_gb is None else vram_gb) < 24.0
 
 
+def check_image_text_model(name: str) -> None:
+    """Reject a base checkpoint that is not a vision-language model.
+
+    ``vindr_cxr_vqa.load_base_model`` calls ``AutoModelForImageTextToText``,
+    which raises a sixty-line ``Unrecognized configuration class ...`` wall
+    naming neither the path it was given nor what it wanted. A Kaggle session
+    with no MedGemma attached auto-detected the flan-T5 meant for generator S
+    and lost all 30 KD-R and all 30 KD-C shards to that message. A local
+    directory is cheap to check first; a hub id is left to the loader.
+    """
+    import json
+
+    config = os.path.join(name, "config.json") if os.path.isdir(name) else ""
+    if not config or not os.path.isfile(config):
+        return
+    with open(config, encoding="utf-8") as f:
+        c = json.load(f)
+    if c.get("vision_config") or c.get("vision_tower"):
+        return
+    raise ValueError(
+        f"teacher model {name!r} is not an image-text-to-text checkpoint "
+        f"(model_type={c.get('model_type')!r}, no vision tower in config.json). "
+        "The teacher is MedGemma; configs/teacher.yaml model.name points elsewhere."
+    )
+
+
 def build_vindr_config(cfg, *, load_in_4bit: bool) -> Config:
     """The vindr-shaped config its loaders read (``train`` block included)."""
     return Config({"model": {"name": cfg.model.name,
@@ -83,6 +109,7 @@ class MedGemmaTeacher:
         from vindr_cxr_vqa.infer import load_model, load_processor
 
         self.cfg = cfg
+        check_image_text_model(cfg.model.name)
         four = resolve_4bit(cfg, load_in_4bit)
         vcfg = build_vindr_config(cfg, load_in_4bit=four)
         self.vcfg = vcfg

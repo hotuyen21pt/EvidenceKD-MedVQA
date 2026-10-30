@@ -482,9 +482,40 @@ def _find_dir(markers, prefer=None):
             return hits[0]
     return ""
 
-MEDGEMMA = MEDGEMMA or _find_dir(["config.json"], prefer="medgemma")
-if MEDGEMMA and not glob.glob(os.path.join(MEDGEMMA, "*.safetensors")):
-    MEDGEMMA = ""
+def model_type_of(d):
+    """`model_type` from a checkpoint's config.json, "" when unreadable."""
+    try:
+        with open(os.path.join(d, "config.json"), encoding="utf-8") as f:
+            return str(json.load(f).get("model_type") or "")
+    except Exception:
+        return ""
+
+def is_image_text_model(d):
+    """True when config.json describes a vision-language checkpoint.
+
+    The teacher loads through `AutoModelForImageTextToText`, which takes only
+    these. "Has a config.json" does not: the flan-T5 attached for generator S
+    has one, and a session with no MedGemma attached picked it as the teacher
+    -- every KD-R and KD-C shard then died with "Unrecognized configuration
+    class T5Config for this kind of AutoModel". A vision tower is exactly what
+    the loader needs, so ask for that rather than for a name.
+    """
+    try:
+        with open(os.path.join(d, "config.json"), encoding="utf-8") as f:
+            c = json.load(f)
+    except Exception:
+        return False
+    return bool(c.get("vision_config") or c.get("vision_tower"))
+
+if MEDGEMMA:
+    if not is_image_text_model(MEDGEMMA):
+        raise SystemExit(f"MEDGEMMA={MEDGEMMA} is not a vision-language checkpoint "
+                         f"(model_type={model_type_of(MEDGEMMA)!r}); the teacher needs MedGemma, "
+                         "not the flan-T5 that generator S uses.")
+else:
+    _vlm = [d for d in find_inputs("config.json")
+            if glob.glob(os.path.join(d, "*.safetensors")) and is_image_text_model(d)]
+    MEDGEMMA = next(iter(sorted(_vlm, key=lambda h: ("medgemma" not in h.lower(), h.count("/"), h))), "")
 ADAPTER = ADAPTER or next((os.path.dirname(p) for p in glob.glob("/kaggle/input/**/adapter_config.json", recursive=True)
                            if "checkpoint-" not in p), "")
 if not ADAPTER:
@@ -493,7 +524,8 @@ if not ADAPTER:
         ADAPTER = next((os.path.dirname(p) for p in glob.glob(os.path.join(up, "**/adapter_config.json"), recursive=True)
                         if "checkpoint-" not in p), "")
 GEN_S_MODEL = GEN_S_MODEL or _find_dir(["spiece.model"], prefer="t5")
-print("MEDGEMMA   ", MEDGEMMA or "(none -> teacher / KD / generator L skipped)")
+print("MEDGEMMA   ", f"{MEDGEMMA}  (model_type={model_type_of(MEDGEMMA)!r})" if MEDGEMMA
+      else "(none attached with a vision tower -> teacher / KD / generator L skipped)")
 print("ADAPTER    ", ADAPTER or "(none -> teacher skipped)")
 print("GEN_S_MODEL", GEN_S_MODEL or "(none -> generator S skipped; template generator only)")
 '''
@@ -599,6 +631,11 @@ FULL_TEACHER = r'''
 HAVE_TEACHER = bool(MEDGEMMA and ADAPTER) and RUN_TEACHER
 if not HAVE_TEACHER:
     print("teacher skipped (needs MedGemma + the VinDr adapter attached, and RUN_TEACHER=True)")
+    if ADAPTER and not MEDGEMMA:
+        # the adapter alone means the teacher was meant to run; say why it will not
+        print("  the VinDr adapter IS attached but no MedGemma base is. Add Input the MedGemma model"
+              " (a config.json carrying a vision_config) -- without it KD-R and KD-C produce nothing"
+              " and stage 2 falls back to the stage-1 checkpoint.")
 else:
     t_start = time.time()
     def budget_left():

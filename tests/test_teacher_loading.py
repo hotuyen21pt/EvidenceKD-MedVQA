@@ -9,9 +9,11 @@ here — a missing ``train`` key killed every KD-R and KD-C shard on Kaggle with
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from evidencekd.teacher.medgemma import build_vindr_config, resolve_4bit
+from evidencekd.teacher.medgemma import build_vindr_config, check_image_text_model, resolve_4bit
 from evidencekd.utils.config import Config
 
 
@@ -77,3 +79,49 @@ class TestVindrConfig:
             node = vcfg
             for k in path:
                 node = getattr(node, k)
+
+
+class TestBaseCheckpointIsAVisionModel:
+    """The teacher loads through ``AutoModelForImageTextToText``.
+
+    A Kaggle session auto-detected the flan-T5 attached for generator S as the
+    teacher; all 60 KD shards died inside transformers with ``Unrecognized
+    configuration class T5Config``, which names neither the path nor the
+    expectation. The check belongs here, before a 4 GB load.
+    """
+
+    @staticmethod
+    def ckpt(tmp_path, name, config):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "config.json").write_text(json.dumps(config), encoding="utf-8")
+        return str(d)
+
+    def test_a_t5_checkpoint_is_refused_by_path_and_model_type(self, tmp_path):
+        bad = self.ckpt(tmp_path, "flan-t5-base", {"model_type": "t5", "d_model": 768})
+        with pytest.raises(ValueError) as e:
+            check_image_text_model(bad)
+        assert bad in str(e.value) and "t5" in str(e.value)
+
+    def test_a_text_only_gemma_is_refused_too(self, tmp_path):
+        bad = self.ckpt(tmp_path, "gemma-3-1b-it", {"model_type": "gemma3_text"})
+        with pytest.raises(ValueError):
+            check_image_text_model(bad)
+
+    def test_a_vision_language_checkpoint_passes(self, tmp_path):
+        ok = self.ckpt(tmp_path, "medgemma-4b-it",
+                       {"model_type": "gemma3", "vision_config": {"image_size": 896}})
+        check_image_text_model(ok)
+
+    def test_an_older_style_vision_tower_key_passes(self, tmp_path):
+        ok = self.ckpt(tmp_path, "vlm", {"model_type": "llava", "vision_tower": "openai/clip"})
+        check_image_text_model(ok)
+
+    def test_a_hub_id_is_left_to_the_loader(self):
+        # offline check only; nothing is downloaded to find out
+        check_image_text_model("google/medgemma-1.5-4b-it")
+
+    def test_a_directory_without_a_config_is_left_to_the_loader(self, tmp_path):
+        d = tmp_path / "empty"
+        d.mkdir()
+        check_image_text_model(str(d))

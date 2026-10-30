@@ -118,3 +118,57 @@ class TestGeneratorSDetection:
     def test_generator_s_is_not_filled_with_the_teacher(self, tmp_path):
         model_dir(tmp_path, "medgemma-4b-it", MEDGEMMA_CONFIG)
         assert detect(tmp_path)["GEN_S_MODEL"] == ""
+
+
+class TestKaggleInputLayouts:
+    """Kaggle nests inputs differently per account and per input kind.
+
+    Observed here: datasets mount as `/kaggle/input/datasets/<owner>/<slug>/`
+    rather than `/kaggle/input/<slug>/`. Nothing in the finders hardcodes a
+    level, but they do carry a depth budget, and exhausting it is silent --
+    the input just looks unattached.
+    """
+
+    FLAT = ""
+    NESTED = "datasets/tuyennguyen21pt"
+
+    def tree(self, root, prefix, model_rel):
+        code = root / prefix / "evidencekd-kaggle-code" if prefix else root / "evidencekd-kaggle-code"
+        (code / "src" / "evidencekd").mkdir(parents=True)
+        (code / "src" / "evidencekd" / "__init__.py").write_text("", encoding="utf-8")
+        (code / "data" / "processed").mkdir(parents=True)
+        (code / "data" / "processed" / "train.jsonl").write_text("{}", encoding="utf-8")
+        images = code.parent / "evidencekd-kaggle-images" / "dataset" / "train_data" / "train"
+        images.mkdir(parents=True)
+        (images / "a.png").write_bytes(b"")
+        return str(code), model_dir(root, model_rel, MEDGEMMA_CONFIG)
+
+    def finders(self, root):
+        ns: dict = {}
+        exec(nc.FINDERS, ns)
+        return functools.partial(ns["find_inputs"], root=str(root))
+
+    @pytest.mark.parametrize("prefix", [FLAT, NESTED])
+    def test_the_code_bundle_and_images_resolve_either_way(self, tmp_path, prefix):
+        code, _ = self.tree(tmp_path, prefix, "medgemma/transformers/medgemma-4b-it/1")
+        find = self.finders(tmp_path)
+        assert find("src/evidencekd") == [code]
+        assert find("data/processed/train.jsonl") == [code]
+        assert find("dataset/train_data/train")
+
+    @pytest.mark.parametrize("model_rel,depth", [
+        ("models/tuyennguyen21pt/mg/transformers/mg-4b-it/1", 6),
+        ("datasets/tuyennguyen21pt/models/mg/transformers/mg-4b-it/1", 7),
+    ])
+    def test_a_model_under_owner_framework_variation_version_is_reached(self, tmp_path, model_rel, depth):
+        # depth 7 was past the old budget: the teacher silently "was not attached"
+        assert model_rel.count("/") + 1 == depth
+        _, want = self.tree(tmp_path, self.NESTED, model_rel)
+        assert detect(tmp_path)["MEDGEMMA"] == want
+
+    def test_the_image_folders_are_never_descended(self, tmp_path):
+        # thousands of PNGs; walking them would cost minutes per marker
+        deep = tmp_path / "evidencekd-kaggle-images" / "dataset" / "train_data" / "train" / "nested"
+        deep.mkdir(parents=True)
+        (deep / "config.json").write_text(json.dumps(MEDGEMMA_CONFIG), encoding="utf-8")
+        assert self.finders(tmp_path)("config.json") == []

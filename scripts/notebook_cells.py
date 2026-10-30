@@ -20,8 +20,16 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FINDERS = r'''
 import os, sys, glob, json, shutil, zipfile, subprocess, time
 
-def find_inputs(marker, root="/kaggle/input", max_depth=6):
-    """Every directory under root that contains `marker` (a relative path)."""
+def find_inputs(marker, root="/kaggle/input", max_depth=8):
+    """Every directory under root that contains `marker` (a relative path).
+
+    The depth budget is spent by Kaggle's own nesting, not by ours: a dataset
+    mounted as `datasets/<owner>/<slug>/` and a model as
+    `models/<owner>/<model>/<framework>/<variation>/<version>/` already sit at
+    depth 3 and 6. Six left no headroom, and running out is silent -- the
+    input is simply "not attached". `train`/`test` are pruned below, so the
+    extra levels cost no time on the image datasets.
+    """
     hits = []
     if not os.path.isdir(root):
         return hits

@@ -216,6 +216,11 @@ một ảnh tải lên.
 
 ### Ví dụ bằng số: một câu hỏi đi hết pipeline
 
+> Bản **có hình**: `python scripts/make_pipeline_pdf.py` dựng
+> `docs/PIPELINE_VISUAL.pdf` — cùng bản ghi này, nhưng ảnh X-quang được nhúng và
+> mọi hộp vẽ lên đúng tỉ lệ, kể cả ba ảnh KD-R đã che vùng. Mọi số thuộc dữ liệu
+> trong đó được tính lại từ `data/processed` lúc chạy, không chép tay.
+
 Bản ghi thật `06b2ff94bd0270f543deb7074c2a006a_1` của tập val. Mọi con số về
 dữ liệu, hộp, nhãn, bảng dữ kiện và quy đổi tọa độ là **tính thật** bằng mã của
 repo; các con số đầu ra của mạng nơ-ron (logit, xác suất, logprob của teacher)
